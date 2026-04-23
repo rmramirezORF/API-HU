@@ -1,0 +1,56 @@
+# ============================================
+# .NET / Build artifacts
+# ============================================
+bin/
+obj/
+out/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+.vscode/
+*.swp
+
+# ============================================
+# Rider / VS Code / JetBrains
+# ============================================
+.idea/
+*.iml
+
+# ============================================
+# Secretos y variables de entorno
+# ============================================
+.env
+.env.local
+.env.*.local
+appsettings.Development.json
+appsettings.Production.json
+appsettings.*.Local.json
+
+# ============================================
+# Logs
+# ============================================
+logs/
+*.log
+
+# ============================================
+# Base de datos local
+# ============================================
+*.mdf
+*.ldf
+*.db
+
+# ============================================
+# Claude Code
+# ============================================
+.claude/worktrees/
+.claude/settings.local.json
+.claude/*.local.*
+
+# ============================================
+# OS
+# ============================================
+Thumbs.db
+.DS_Store
+desktop.ini

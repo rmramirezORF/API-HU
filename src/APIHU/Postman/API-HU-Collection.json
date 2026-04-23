@@ -1,0 +1,116 @@
+{
+  "info": {
+    "name": "API-HU Collection",
+    "description": "Colección de ejemplos para la API de Generación de Historias de Usuario",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/api/hu/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "hu", "health"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Generar HUs (Básico)",
+      "request": {
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/api/hu/generate",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "hu", "generate"]
+        },
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"texto\": \"Necesitamos un sistema de gestión de inventario que permita registrar productos, controlar stock mínimo y generar alertas cuando baje del umbral.\"\n}"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Generar HUs (Completo)",
+      "request": {
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/api/hu/generate",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "hu", "generate"]
+        },
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"texto\": \"En la reunión de hoy con el equipo de producto definimos que necesitamos una aplicación móvil para que los empleados registren sus horas trabajadas. La app debe permitir iniciar sesión con correo corporativo, registrar entrada y salida con geolocalización, ver historial de registros en un calendario, y el administrador debe poder aprobar o rechazar registros. También necesitamos reportes semanales y mensuales exportables a PDF.\",\n  \"proyecto\": \"Control de Horas v1.0\",\n  \"maximoHUs\": 5,\n  \"idioma\": \"es\"\n}"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Generar y Guardar HUs",
+      "request": {
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/api/hu/generate-and-save",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "hu", "generate-and-save"]
+        },
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"texto\": \"El cliente solicitó un sistema de e-commerce con las siguientes funcionalidades: catálogo de productos con imágenes, carrito de compras, proceso de pago con tarjeta de crédito, seguimiento de pedidos, sistema de reseñas y calificación de productos, y panel de administración para gestionar inventario.\",\n  \"proyecto\": \"E-Commerce v2\",\n  \"maximoHUs\": 6,\n  \"idioma\": \"es\"\n}"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Generar HUs en Inglés",
+      "request": {
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/api/hu/generate",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "hu", "generate"]
+        },
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"texto\": \"We need a customer relationship management system that allows tracking interactions with clients, scheduling follow-up tasks, managing sales pipelines, and generating performance reports.\",\n  \"proyecto\": \"CRM Enterprise\",\n  \"maximoHUs\": 4,\n  \"idioma\": \"en\"\n}"
+        }
+      },
+      "response": []
+    }
+  ]
+}
