@@ -169,7 +169,8 @@ public class HuProcessingOrchestrator : IHuProcessingOrchestrator
             else
             {
                 _logger.LogInformation(
-                    "[{CorrelationId}] ✓ VALIDACIÓN FINAL - Todas las HUs son válidas");
+                    "[{CorrelationId}] ✓ VALIDACIÓN FINAL - Todas las HUs son válidas",
+                    correlationId);
             }
 
             // ============================================
@@ -180,9 +181,11 @@ public class HuProcessingOrchestrator : IHuProcessingOrchestrator
             resultado.TiempoTotal = stopwatch.Elapsed;
 
             _logger.LogInformation(
-                "[{CorrelationId}] ════════════════════════════════════════════════════════");
+                "[{CorrelationId}] ════════════════════════════════════════════════════════",
+                correlationId);
             _logger.LogInformation(
-                "[{CorrelationId}] FIN - Pipeline completado exitosamente");
+                "[{CorrelationId}] FIN - Pipeline completado exitosamente",
+                correlationId);
             _logger.LogInformation(
                 "[{CorrelationId}] Resumen: Limpieza={Limpieza}ms, Estructuración={Estructuracion}ms, Generación={Generacion}ms, Total={Total}ms | Tokens in={TIn} out={TOut} total={TTot}",
                 correlationId,

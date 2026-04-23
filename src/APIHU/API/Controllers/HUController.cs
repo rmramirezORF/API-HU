@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using APIHU.Application.DTOs;
 using APIHU.Application.Interfaces;
+using APIHU.Domain.Interfaces;
 
 namespace APIHU.API.Controllers;
 
@@ -14,15 +15,18 @@ public class HUController : ControllerBase
 {
     private readonly IGeneracionHUService _generacionService;
     private readonly IPromptService _promptService;
+    private readonly IAIProviderService _aiProvider;
     private readonly ILogger<HUController> _logger;
 
     public HUController(
         IGeneracionHUService generacionService,
         IPromptService promptService,
+        IAIProviderService aiProvider,
         ILogger<HUController> logger)
     {
         _generacionService = generacionService;
         _promptService = promptService;
+        _aiProvider = aiProvider;
         _logger = logger;
     }
 
@@ -192,7 +196,8 @@ public class HUController : ControllerBase
             Timestamp = DateTime.UtcNow,
             Service = "API-HU Generator v2.0",
             Pipeline = "3 etapas (Limpieza → Estructuración → HU)",
-            ProveedorIA = "OpenAI (desacoplado)"
+            ProveedorIA = _aiProvider.NombreProveedor,
+            Modelo = _aiProvider.ModeloActual
         });
     }
 }

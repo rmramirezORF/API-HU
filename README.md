@@ -1,174 +1,127 @@
-# API de Generación de Historias de Usuario v2.0 - Production Ready
+# API-HU — Generación de Historias de Usuario con Claude
 
-## 📋 Descripción
-
-API REST empresarial desarrollada en ASP.NET Core (.NET 10) con **Clean Architecture** lista para producción. Utiliza inteligencia artificial para generar Historias de Usuario estructuradas a partir de texto.
+API REST en **ASP.NET Core (.NET 10)** que convierte texto crudo (transcripciones de Teams, notas de reunión, requerimientos) en **Historias de Usuario estructuradas** con criterios de aceptación y tareas técnicas, usando **Anthropic Claude**.
 
 ---
 
-## 🏗️ Arquitectura Clean Architecture
+## 🏗️ Arquitectura (Clean Architecture)
 
 ```
-APIHU/
-├── API/                          # Capa de presentación
-│   └── Controllers/              # Endpoints REST
-├── Application/                  # Capa de aplicación
-│   ├── DTOs/                     # Data Transfer Objects
-│   ├── Interfaces/               # Contratos de servicios
-│   └── Services/                 # Servicios + Orchestrator + Validator
-├── Domain/                       # Capa de dominio
-│   ├── Entities/                 # Entidades del negocio
-│   └── Interfaces/               # Contratos de repositorios
-├── Infrastructure/               # Capa de infraestructura
-│   ├── AI/                       # Proveedores de IA
-│   │   ├── Prompts/              # Prompts versionados
-│   │   └── OpenAIProviderService.cs
-│   ├── Middleware/               # Correlation ID, Rate Limiting, API Key
-│   ├── BackgroundServices/       # Procesamiento asíncrono
-│   ├── Logging/                  # Configuración de logging
-│   └── Persistence/              # DbContext y repositorios
-├── Database/                     # Scripts SQL + Migraciones
-├── Program.cs                    # Punto de entrada
-└── appsettings.json              # Configuración
+src/APIHU/
+├── API/Controllers/          # Endpoints REST
+├── Application/              # Casos de uso
+│   ├── DTOs/                 # Contratos request/response
+│   ├── Interfaces/           # Contratos de servicios
+│   └── Services/             # Orchestrator, Validator, PromptService
+├── Domain/                   # Entidades + interfaces puras
+│   ├── Entities/
+│   └── Interfaces/
+├── Infrastructure/           # Adaptadores externos
+│   ├── AI/                   # AnthropicProviderService + Prompts/
+│   ├── BackgroundServices/
+│   ├── Logging/              # Serilog
+│   ├── Middleware/           # CorrelationId, RateLimiting, ApiKey
+│   └── Persistence/          # EF Core + SQL Server
+├── Migrations/               # EF Core migrations
+├── Program.cs
+├── appsettings.json          # Config pública (sin secretos)
+└── appsettings.Example.json  # Plantilla
 ```
 
 ---
 
-## 🔄 Pipeline de Procesamiento (3 Etapas)
+## 🔄 Pipeline (3 etapas)
 
 ```
-Texto Original
-     │
-     ▼
+Texto crudo
+    ↓
 ┌─────────────────┐
-│  1. LIMPIEZA   │  → Elimina ruido, normaliza texto
+│ 1. LIMPIEZA     │  → Elimina fillers, repeticiones, ruido
 └────────┬────────┘
-         │
-         ▼
-┌─────────────────────┐
-│ 2. ESTRUCTURACIÓN  │  → Identifica requerimientos
-└────────┬────────────┘
-         │
-         ▼
+         ↓
 ┌─────────────────┐
-│ 3. GENERACIÓN   │  → Crea HUs con criterios y tareas
+│ 2. ESTRUCTURACIÓN │  → Identifica y categoriza requerimientos
 └────────┬────────┘
-         │
-         ▼
-   Validación HU → Response
+         ↓
+┌─────────────────┐
+│ 3. GENERACIÓN HU│  → Crea HUs con criterios y tareas técnicas
+└────────┬────────┘
+         ↓
+    VALIDACIÓN → Response JSON
 ```
+
+Cada etapa usa un prompt versionado en `Infrastructure/AI/Prompts/v{n}/`.
 
 ---
 
-## 🛡️ Características de Producción
+## 🤖 Proveedor de IA: Anthropic Claude
 
-| Característica | Descripción |
-|----------------|-------------|
-| **Correlation ID** | Trazabilidad única por request |
-| **Rate Limiting** | Límite de requests por IP (configurable) |
-| **API Key** | Seguridad con header X-API-Key |
-| **HuProcessingOrchestrator** | Control central del pipeline con logging y medición de tiempo |
-| **HuValidatorService** | Valida estructura, criterios, duplicados y coherencia |
-| **Background Service** | Preparado para procesamiento asíncrono |
-| **Serilog** | Logging estructurado con CorrelationId |
+Implementado en [AnthropicProviderService.cs](src/APIHU/Infrastructure/AI/AnthropicProviderService.cs).
 
----
+**Modelos soportados** (configurable en `.env` o `appsettings.json`):
 
-## 🤖 IA Desacoplada
+| Modelo | Uso recomendado |
+|---|---|
+| `claude-sonnet-4-6` | **Por defecto** — balance calidad/velocidad/coste |
+| `claude-opus-4-6` | Máxima calidad, más caro |
+| `claude-haiku-4-5-20251001` | Más rápido y barato |
 
-```csharp
-// Cambiar proveedor es simple:
-builder.Services.AddScoped<IAIProviderService, AzureOpenAIProviderService>();
-```
+**Robustez incluida:**
+- Reintentos con **exponential backoff + jitter**
+- Respeto al header `Retry-After`
+- Manejo específico de `429`/`529`/`5xx` (transitorios) vs `400`/`401`/`404` (errores definitivos)
+- **Tracking real de tokens** (input/output) persistido en BD
+- Timeout configurable por request
 
-- **OpenAIProviderService**: Implementación actual
-- **AzureOpenAIService**: Preparado para futuro
-- **MockAIProviderService**: Para testing
+La interfaz `IAIProviderService` está desacoplada. Para cambiar de proveedor basta con añadir una nueva implementación y registrarla en `Program.cs`.
 
 ---
 
-## 🧾 Gestión de Prompts Versionados
+## 🛡️ Middlewares de producción
 
-```
-Infrastructure/AI/Prompts/
-├── v1/
-│   ├── limpieza.txt
-│   ├── estructuracion.txt
-│   └── hu.txt
-└── v2/
-```
-
----
-
-## 🗄️ Base de Datos (v2.0 Production)
-
-**Tablas:**
-- **GeneracionesHU**: Registro con estado, duración, modelo IA, tokens, correlationId
-- **HistoriasUsuario**: Relacionada con GeneracionesHU
-- **CriteriosAceptacion**: Criterios de cada HU
-- **TareasTecnicas**: Tareas técnicas de cada HU
-
-**Campos adicionales en GeneracionesHU:**
-- `Estado` (Procesando/Completado/Error)
-- `DuracionMs` (duración del procesamiento)
-- `ModeloIA` (modelo usado)
-- `TokensConsumidos` (tracking)
-- `CorrelationId` (trazabilidad)
-- `ClientIP` / `UserAgent`
-
----
-
-## 📊 Logging Estructurado (Serilog)
-
-```
-2026-04-21 10:30:45.123 [INFO] [A1B2C3D4] INICIO - Pipeline de procesamiento
-2026-04-21 10:30:46.456 [INFO] [A1B2C3D4] ▶ ETAPA 1: LIMPIEZA - Iniciando
-2026-04-21 10:30:47.789 [INFO] [A1B2C3D4] ✓ ETAPA 1: LIMPIEZA - Completada en 1333ms
-2026-04-21 10:30:52.012 [INFO] [A1B2C3D4] Response A1B2C3D4 | 200 | Duration: 6500ms
-```
-
----
-
-## ⚙️ Configuración (appsettings.json)
-
-```json
-{
-  "OpenAI": {
-    "ApiKey": "sk-...",
-    "TimeoutSegundos": 120,
-    "EstrategiaCorreccion": true
-  },
-  "RateLimiting": {
-    "Enabled": true,
-    "MaxRequests": 100,
-    "Window": "00:01:00"
-  },
-  "ApiKey": {
-    "Enabled": false,
-    "ValidKeys": ["dev-key-001"]
-  },
-  "Pipeline": {
-    "ValidarHUs": true,
-    "MaximoHUsPorRequest": 10
-  }
-}
-```
+| Middleware | Función |
+|---|---|
+| `CorrelationIdMiddleware` | ID único por request para trazabilidad |
+| `RateLimitingMiddleware` | Límite de requests por IP (configurable) |
+| `ApiKeyMiddleware` | Valida header `X-API-Key` (opcional) |
 
 ---
 
 ## 📡 Endpoints
 
-| Método | Endpoint | Descripción |
-|--------|----------|-------------|
-| POST | `/api/hu/generate` | Generar HUs (sin guardar) |
-| POST | `/api/hu/generate-and-save` | Generar y guardar en BD |
-| GET | `/api/hu/prompts/versions` | Obtener versiones de prompts |
-| GET | `/api/hu/health` | Health check |
+| Método | Ruta | Descripción |
+|---|---|---|
+| POST | `/api/hu/generate` | Genera HUs (sin guardar) |
+| POST | `/api/hu/generate-and-save` | Genera y persiste en BD |
+| GET | `/api/hu/prompts/versions` | Lista versiones de prompts |
+| GET | `/api/hu/health` | Health check (incluye modelo activo) |
 
-**Headers de respuesta:**
-- `X-Correlation-ID`: ID único para trazabilidad
-- `X-RateLimit-Limit`: Límite de requests
-- `X-RateLimit-Remaining`: Requests restantes
+Todas las respuestas incluyen `X-Correlation-ID` para trazabilidad.
+
+---
+
+## ⚙️ Configuración
+
+### Variables de entorno (`.env`)
+
+Copia `.env.example` a `.env` y rellena:
+
+```env
+ANTHROPIC_API_KEY=sk-ant-...
+Anthropic__Modelo=claude-sonnet-4-6
+ConnectionStrings__DefaultConnection=Server=localhost,1433;Database=APIHU;...
+PORT=5000
+```
+
+El archivo `.env` está en `.gitignore` — nunca se sube al repo.
+
+### Precedencia de configuración
+
+```
+.env  >  Variables de entorno del SO  >  appsettings.json
+```
+
+El convenio estándar de ASP.NET Core aplica: `Seccion__Clave` en env var sobrescribe `Seccion:Clave` en appsettings.
 
 ---
 
@@ -176,20 +129,23 @@ Infrastructure/AI/Prompts/
 
 ```bash
 cd src/APIHU
-dotnet build
+dotnet restore
 dotnet run
 ```
 
-Swagger: `http://localhost:5000/swagger`
+- Swagger: `http://localhost:5000/swagger`
+- Health:  `http://localhost:5000/api/hu/health`
 
 ---
 
-## 🧪 Ejemplo de Request
+## 🧪 Ejemplo de request
 
-```json
+```http
 POST /api/hu/generate
+Content-Type: application/json
+
 {
-  "texto": "Reunión con cliente: Necesitamos un sistema de inventario...",
+  "texto": "Reunión 15/04: necesitamos un sistema para gestionar inventario. El usuario admin debe poder registrar productos, ver stock y recibir alertas cuando algo baje del mínimo. También hay que exportar reportes.",
   "proyecto": "Inventario v2",
   "maximoHUs": 5,
   "idioma": "es",
@@ -197,48 +153,61 @@ POST /api/hu/generate
 }
 ```
 
-**Response incluye:**
+**Response:**
+
 ```json
 {
   "exitoso": true,
-  "correlationId": "A1B2C3D4-20260421103045",
+  "mensaje": "Se generaron 3 historias de usuario exitosamente",
+  "correlationId": "...",
+  "textoLimpio": "...",
+  "historiasUsuario": [ ... ],
   "metadata": {
-    "duracionMs": 6500
+    "totalHUs": 3,
+    "duracionMs": 8420,
+    "versionPrompt": "v1"
   }
 }
 ```
 
 ---
 
+## 🗄️ Base de datos
+
+**SQL Server** (EF Core). Las migraciones corren automáticamente al arrancar.
+
+**Tablas:**
+- `GeneracionesHU` — registro de cada ejecución (correlationId, modelo, tokens, duración, estado)
+- `HistoriasUsuario` — HUs generadas
+- `CriteriosAceptacion` — criterios por HU
+- `TareasTecnicas` — tareas técnicas por HU
+
+---
+
+## 📊 Logging
+
+Serilog estructurado → consola + archivo rotativo diario (`logs/apihu-YYYYMMDD.log`).
+
+Cada línea incluye `CorrelationId`. Ejemplo:
+
+```
+[10:30:45 INF] [A1B2] ▶ ETAPA 1: LIMPIEZA - Iniciando
+[10:30:47 INF] [A1B2] ✓ ETAPA 1: LIMPIEZA - Completada en 1333ms
+[10:30:52 INF] [A1B2] FIN - Pipeline completado | Tokens in=1240 out=890 total=2130
+```
+
+---
+
 ## 🔐 Seguridad
 
-- **API Key**: Header `X-API-Key` (configurable)
-- **Rate Limiting**: Por IP o API Key
-- **CORS**: Configurado para desarrollo
-- **Validación**: Data Annotations en todos los inputs
-
----
-
-## 📈 Evolución
-
-| Versión | Características |
-|---------|-----------------|
-| **v1.0** | API básica con OpenAI |
-| **v2.0** | Clean Architecture, pipeline 3 etapas |
-| **v2.0 Production** | Correlation ID, Rate Limiting, API Key, Orchestrator, Validator, Background Service |
-
----
-
-## 🔮 Mejoras Futuras
-
-1. **Caché**: Redis para evitar llamadas repetidas
-2. **Azure OpenAI**: Proveedor alternativo
-3. **Exportación**: Word, Jira, Markdown
-4. **Autenticación**: JWT
-5. **Métricas**: Prometheus/Grafana
+- **Secretos fuera del repo**: `.env` + `.gitignore`
+- **Rate limiting** por IP
+- **API Key** opcional (`X-API-Key` header)
+- **Validación de inputs** con Data Annotations
+- **Correlation ID** para auditar cualquier request
 
 ---
 
 ## 📄 Licencia
 
-MIT License - Feel free to use and modify.
+MIT
