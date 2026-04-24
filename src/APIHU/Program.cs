@@ -76,32 +76,103 @@ builder.Services.AddDbContext<APIHUDbContext>(options =>
     }));
 
 // ============================================
-// 3. CONFIGURACIÓN DE IA (Anthropic / Claude)
+// 3. CONFIGURACIÓN DE IA (selector por AI:Provider)
 // ============================================
-builder.Services.Configure<AnthropicOptions>(builder.Configuration.GetSection(AnthropicOptions.SectionName));
-var anthropicOptions = builder.Configuration.GetSection(AnthropicOptions.SectionName).Get<AnthropicOptions>()
-    ?? throw new InvalidOperationException("Configuración de Anthropic no encontrada");
+// Proveedores soportados: "anthropic" | "gemini" | "openrouter"
+// Por defecto: gemini (free tier generoso, sin tarjeta)
+var aiProvider = (builder.Configuration["AI:Provider"]
+    ?? Environment.GetEnvironmentVariable("AI_PROVIDER")
+    ?? "gemini").ToLowerInvariant();
 
-// Permitir sobrescribir la API key desde variable de entorno ANTHROPIC_API_KEY (prioridad alta)
-var envApiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
-if (!string.IsNullOrWhiteSpace(envApiKey))
+Console.WriteLine($">> AI Provider seleccionado: {aiProvider}");
+
+string modeloSeleccionado;
+int timeoutProvider;
+
+switch (aiProvider)
 {
-    anthropicOptions.ApiKey = envApiKey;
+    case "anthropic":
+    {
+        builder.Services.Configure<AnthropicOptions>(builder.Configuration.GetSection(AnthropicOptions.SectionName));
+        var opts = builder.Configuration.GetSection(AnthropicOptions.SectionName).Get<AnthropicOptions>()
+            ?? throw new InvalidOperationException("Configuración de Anthropic no encontrada");
+
+        var envKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        if (!string.IsNullOrWhiteSpace(envKey)) opts.ApiKey = envKey;
+
+        if (string.IsNullOrWhiteSpace(opts.ApiKey))
+        {
+            throw new InvalidOperationException(
+                "ANTHROPIC_API_KEY no configurada. Define la variable de entorno o Anthropic:ApiKey en appsettings.");
+        }
+
+        builder.Services.AddSingleton(opts);
+        builder.Services.AddHttpClient<IAIProviderService, AnthropicProviderService>(client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSegundos);
+        });
+
+        modeloSeleccionado = opts.Modelo;
+        timeoutProvider = opts.TimeoutSegundos;
+        break;
+    }
+
+    case "gemini":
+    {
+        builder.Services.Configure<GeminiOptions>(builder.Configuration.GetSection(GeminiOptions.SectionName));
+        var opts = builder.Configuration.GetSection(GeminiOptions.SectionName).Get<GeminiOptions>()
+            ?? throw new InvalidOperationException("Configuración de Gemini no encontrada");
+
+        var envKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
+        if (!string.IsNullOrWhiteSpace(envKey)) opts.ApiKey = envKey;
+
+        if (string.IsNullOrWhiteSpace(opts.ApiKey))
+        {
+            throw new InvalidOperationException(
+                "GEMINI_API_KEY no configurada. Obtén una gratis en https://aistudio.google.com/apikey");
+        }
+
+        builder.Services.AddSingleton(opts);
+        builder.Services.AddHttpClient<IAIProviderService, GeminiProviderService>(client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSegundos);
+        });
+
+        modeloSeleccionado = opts.Modelo;
+        timeoutProvider = opts.TimeoutSegundos;
+        break;
+    }
+
+    case "openrouter":
+    {
+        builder.Services.Configure<OpenRouterOptions>(builder.Configuration.GetSection(OpenRouterOptions.SectionName));
+        var opts = builder.Configuration.GetSection(OpenRouterOptions.SectionName).Get<OpenRouterOptions>()
+            ?? throw new InvalidOperationException("Configuración de OpenRouter no encontrada");
+
+        var envKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        if (!string.IsNullOrWhiteSpace(envKey)) opts.ApiKey = envKey;
+
+        if (string.IsNullOrWhiteSpace(opts.ApiKey))
+        {
+            throw new InvalidOperationException(
+                "OPENROUTER_API_KEY no configurada. Obtén una gratis en https://openrouter.ai/keys");
+        }
+
+        builder.Services.AddSingleton(opts);
+        builder.Services.AddHttpClient<IAIProviderService, OpenRouterProviderService>(client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSegundos);
+        });
+
+        modeloSeleccionado = opts.Modelo;
+        timeoutProvider = opts.TimeoutSegundos;
+        break;
+    }
+
+    default:
+        throw new InvalidOperationException(
+            $"AI:Provider '{aiProvider}' no soportado. Valores válidos: anthropic | gemini | openrouter");
 }
-
-if (string.IsNullOrWhiteSpace(anthropicOptions.ApiKey))
-{
-    throw new InvalidOperationException(
-        "ANTHROPIC_API_KEY no configurada. Define la variable de entorno o Anthropic:ApiKey en appsettings.");
-}
-
-builder.Services.AddSingleton(anthropicOptions);
-
-// HttpClient tipado para el proveedor Anthropic
-builder.Services.AddHttpClient<IAIProviderService, AnthropicProviderService>(client =>
-{
-    client.Timeout = TimeSpan.FromSeconds(anthropicOptions.TimeoutSegundos);
-});
 
 // ============================================
 // 4. SERVICIOS DE APLICACIÓN (v2.0 Production)
@@ -257,7 +328,7 @@ Console.WriteLine($"""
     ║  ARQUITECTURA:                                          ║
     ║  • Clean Architecture                                     ║
     ║  • Pipeline: 3 etapas (Limpieza→Estructuración→HU)       ║
-    ║  • IA: Anthropic Claude ({anthropicOptions.Modelo,-20})   ║
+    ║  • IA: {aiProvider,-10} ({modeloSeleccionado,-25})   ║
     ║                                                          ║
     ║  PRODUCCIÓN:                                             ║
     ║  • Correlation ID: ✓                                     ║
