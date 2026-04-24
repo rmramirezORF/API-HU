@@ -24,10 +24,12 @@ public class GeminiOptions
     public string BaseUrl { get; set; } = "https://generativelanguage.googleapis.com/v1beta";
 
     /// <summary>
-    /// Modelo a utilizar. Ej: gemini-2.0-flash (rápido, free tier generoso),
-    /// gemini-2.0-flash-lite, gemini-1.5-pro, gemini-1.5-flash
+    /// Modelo a utilizar. Modelos con free tier activo (abril 2026):
+    ///   gemini-2.5-flash       (recomendado - con thinking interno)
+    ///   gemini-2.5-flash-lite  (más rápido y ligero)
+    /// Los modelos gemini-1.5-* y gemini-2.0-flash ya NO tienen free tier.
     /// </summary>
-    public string Modelo { get; set; } = "gemini-2.0-flash";
+    public string Modelo { get; set; } = "gemini-2.5-flash";
 
     /// <summary>
     /// Temperatura (0.0 - 2.0 en Gemini, aunque se recomienda 0.0 - 1.0)
@@ -53,6 +55,16 @@ public class GeminiOptions
     /// Timeout de cada request individual en segundos
     /// </summary>
     public int TimeoutSegundos { get; set; } = 120;
+
+    /// <summary>
+    /// Solo aplica a modelos Gemini 2.5+. Cantidad de tokens que el modelo puede usar
+    /// para razonamiento interno ("thinking") antes de generar la respuesta visible.
+    ///   0  = thinking desactivado (más rápido, más tokens disponibles para la respuesta)
+    ///   -1 = dinámico (Google decide, default del modelo)
+    ///   N  = hasta N tokens de thinking
+    /// Para generar JSON estructurado (HUs) lo dejamos en 0 por defecto.
+    /// </summary>
+    public int ThinkingBudget { get; set; } = 0;
 }
 
 /// <summary>
@@ -141,6 +153,22 @@ public class GeminiProviderService : IAIProviderService
     {
         var endpoint = $"{_options.BaseUrl}/models/{_options.Modelo}:generateContent";
 
+        var generationConfig = new GeminiGenerationConfig
+        {
+            Temperature = _options.Temperatura,
+            MaxOutputTokens = _options.MaxTokens
+        };
+
+        // Gemini 2.5+ soporta thinkingConfig. Para nuestro caso (JSON estructurado)
+        // es mejor desactivarlo para no gastar tokens en razonamiento oculto.
+        if (_options.Modelo.Contains("2.5", StringComparison.OrdinalIgnoreCase))
+        {
+            generationConfig.ThinkingConfig = new GeminiThinkingConfig
+            {
+                ThinkingBudget = _options.ThinkingBudget
+            };
+        }
+
         var requestBody = new GeminiRequest
         {
             Contents = new[]
@@ -150,11 +178,7 @@ public class GeminiProviderService : IAIProviderService
                     Parts = new[] { new GeminiPart { Text = prompt } }
                 }
             },
-            GenerationConfig = new GeminiGenerationConfig
-            {
-                Temperature = _options.Temperatura,
-                MaxOutputTokens = _options.MaxTokens
-            }
+            GenerationConfig = generationConfig
         };
 
         var json = JsonSerializer.Serialize(requestBody, SerializerOptions);
@@ -285,6 +309,12 @@ public class GeminiProviderService : IAIProviderService
     {
         public double Temperature { get; set; }
         public int MaxOutputTokens { get; set; }
+        public GeminiThinkingConfig? ThinkingConfig { get; set; }
+    }
+
+    private class GeminiThinkingConfig
+    {
+        public int ThinkingBudget { get; set; }
     }
 
     private class GeminiResponse
