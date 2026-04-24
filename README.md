@@ -1,6 +1,8 @@
-# API-HU — Generación de Historias de Usuario con Claude
+# API-HU — Generación de Historias de Usuario con IA
 
-API REST en **ASP.NET Core (.NET 10)** que convierte texto crudo (transcripciones de Teams, notas de reunión, requerimientos) en **Historias de Usuario estructuradas** con criterios de aceptación y tareas técnicas, usando **Anthropic Claude**.
+API REST en **ASP.NET Core (.NET 10)** que convierte texto crudo (transcripciones de Teams, notas de reunión, requerimientos) en **Historias de Usuario estructuradas** con criterios de aceptación y tareas técnicas.
+
+Soporta múltiples proveedores de IA con **fallback automático entre ellos**: Gemini, OpenRouter y Groq.
 
 ---
 
@@ -17,7 +19,7 @@ src/APIHU/
 │   ├── Entities/
 │   └── Interfaces/
 ├── Infrastructure/           # Adaptadores externos
-│   ├── AI/                   # AnthropicProviderService + Prompts/
+│   ├── AI/                   # Providers (Gemini/OpenRouter/Groq) + Prompts/
 │   ├── BackgroundServices/
 │   ├── Logging/              # Serilog
 │   ├── Middleware/           # CorrelationId, RateLimiting, ApiKey
@@ -54,26 +56,39 @@ Cada etapa usa un prompt versionado en `Infrastructure/AI/Prompts/v{n}/`.
 
 ---
 
-## 🤖 Proveedor de IA: Anthropic Claude
+## 🤖 Proveedores de IA soportados
 
-Implementado en [AnthropicProviderService.cs](src/APIHU/Infrastructure/AI/AnthropicProviderService.cs).
+Todos con **tier gratuito** (sin tarjeta de crédito). El proyecto permite combinarlos con **fallback automático entre ellos**.
 
-**Modelos soportados** (configurable en `.env` o `appsettings.json`):
+| Proveedor | Archivo | Free tier | Estabilidad |
+|---|---|---|---|
+| **OpenRouter** | [OpenRouterProviderService.cs](src/APIHU/Infrastructure/AI/OpenRouterProviderService.cs) | 200 req/día en modelos `:free` | ⚠️ Variable (upstream compartido) |
+| **Groq** | [GroqProviderService.cs](src/APIHU/Infrastructure/AI/GroqProviderService.cs) | 14,400 req/día (Llama 3.3 70B) | ✅ Muy estable |
+| **Gemini** | [GeminiProviderService.cs](src/APIHU/Infrastructure/AI/GeminiProviderService.cs) | 1,500 req/día (Gemini 2.0 Flash) | ✅ Estable |
 
-| Modelo | Uso recomendado |
-|---|---|
-| `claude-sonnet-4-6` | **Por defecto** — balance calidad/velocidad/coste |
-| `claude-opus-4-6` | Máxima calidad, más caro |
-| `claude-haiku-4-5-20251001` | Más rápido y barato |
+### Fallback en 2 niveles
 
-**Robustez incluida:**
+1. **Dentro de un proveedor** (OpenRouter): si el modelo principal falla, prueba con modelos alternativos de la misma API.
+2. **Entre proveedores** ([MultiProviderFallbackService.cs](src/APIHU/Infrastructure/AI/MultiProviderFallbackService.cs)): si un proveedor entero falla, pasa al siguiente.
+
+```
+OpenRouter (modelo A → B → C → D)
+        │ si todos fallan
+        ▼
+Groq (Llama 3.3 70B)
+        │ si falla
+        ▼
+Gemini (2.0 Flash)
+```
+
+**Robustez incluida en cada proveedor:**
 - Reintentos con **exponential backoff + jitter**
 - Respeto al header `Retry-After`
-- Manejo específico de `429`/`529`/`5xx` (transitorios) vs `400`/`401`/`404` (errores definitivos)
+- Manejo específico de `429`/`503`/`5xx` (transitorios) vs `400`/`401` (errores definitivos)
 - **Tracking real de tokens** (input/output) persistido en BD
 - Timeout configurable por request
 
-La interfaz `IAIProviderService` está desacoplada. Para cambiar de proveedor basta con añadir una nueva implementación y registrarla en `Program.cs`.
+La interfaz `IAIProviderService` está desacoplada — añadir un nuevo proveedor es crear una implementación más.
 
 ---
 
@@ -107,8 +122,14 @@ Todas las respuestas incluyen `X-Correlation-ID` para trazabilidad.
 Copia `.env.example` a `.env` y rellena:
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...
-Anthropic__Modelo=claude-sonnet-4-6
+# Orden de proveedores (fallback automático)
+AI__ProviderChain=openrouter,groq,gemini
+
+# Configura solo las keys que tengas (las demás se saltan al arrancar)
+OPENROUTER_API_KEY=sk-or-v1-...
+GROQ_API_KEY=gsk_...
+GEMINI_API_KEY=AIza...
+
 ConnectionStrings__DefaultConnection=Server=localhost,1433;Database=APIHU;...
 PORT=5000
 ```

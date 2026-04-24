@@ -82,16 +82,16 @@ builder.Services.AddDbContext<APIHUDbContext>(options =>
 // por completo, se intenta el siguiente. Solo se registran los que tienen
 // API key válida (los demás se saltan con un warning).
 //
-// Valores válidos: anthropic, gemini, openrouter, groq
+// Valores válidos: gemini, openrouter, groq
 // Configuración por .env:
-//   AI__ProviderChain=openrouter,groq,gemini,anthropic    (chain)
-//   AI__Provider=openrouter                                (legacy, un solo provider)
+//   AI__ProviderChain=openrouter,groq,gemini    (chain)
+//   AI__Provider=openrouter                      (legacy, un solo provider)
 
 var chainRaw = builder.Configuration["AI:ProviderChain"]
     ?? Environment.GetEnvironmentVariable("AI__ProviderChain")
     ?? builder.Configuration["AI:Provider"]
     ?? Environment.GetEnvironmentVariable("AI_PROVIDER")
-    ?? "openrouter,groq,gemini,anthropic";
+    ?? "openrouter,groq,gemini";
 
 var chain = chainRaw.Split(',', StringSplitOptions.RemoveEmptyEntries)
     .Select(s => s.Trim().ToLowerInvariant())
@@ -109,27 +109,6 @@ foreach (var proveedor in chain)
 {
     switch (proveedor)
     {
-        case "anthropic":
-        {
-            var opts = builder.Configuration.GetSection(AnthropicOptions.SectionName).Get<AnthropicOptions>()
-                ?? new AnthropicOptions();
-            var envKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
-            if (!string.IsNullOrWhiteSpace(envKey)) opts.ApiKey = envKey;
-
-            if (string.IsNullOrWhiteSpace(opts.ApiKey) || opts.ApiKey.StartsWith("sk-ant-PEGA"))
-            {
-                resumenRegistro.Add($"  [skip] anthropic       (sin API key)");
-                break;
-            }
-            builder.Services.Configure<AnthropicOptions>(builder.Configuration.GetSection(AnthropicOptions.SectionName));
-            builder.Services.AddSingleton(opts);
-            builder.Services.AddHttpClient<AnthropicProviderService>(c =>
-                c.Timeout = TimeSpan.FromSeconds(opts.TimeoutSegundos));
-            tiposRegistrados.Add(typeof(AnthropicProviderService));
-            resumenRegistro.Add($"  [ok]   anthropic       ({opts.Modelo})");
-            break;
-        }
-
         case "gemini":
         {
             var opts = builder.Configuration.GetSection(GeminiOptions.SectionName).Get<GeminiOptions>()
@@ -207,7 +186,7 @@ if (tiposRegistrados.Count == 0)
 {
     throw new InvalidOperationException(
         "No hay ningún proveedor de IA configurado con API key válida. " +
-        "Define al menos una: ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY o GROQ_API_KEY.");
+        "Define al menos una: GEMINI_API_KEY, OPENROUTER_API_KEY o GROQ_API_KEY.");
 }
 
 // Registrar IAIProviderService:
