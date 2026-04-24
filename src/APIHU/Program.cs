@@ -76,129 +76,163 @@ builder.Services.AddDbContext<APIHUDbContext>(options =>
     }));
 
 // ============================================
-// 3. CONFIGURACIÓN DE IA (selector por AI:Provider)
+// 3. CONFIGURACIÓN DE IA (chain de proveedores con fallback automático)
 // ============================================
-// Proveedores soportados: "anthropic" | "gemini" | "openrouter"
-// Por defecto: gemini (free tier generoso, sin tarjeta)
-var aiProvider = (builder.Configuration["AI:Provider"]
+// AI:ProviderChain define el orden de proveedores. Si el primero falla
+// por completo, se intenta el siguiente. Solo se registran los que tienen
+// API key válida (los demás se saltan con un warning).
+//
+// Valores válidos: anthropic, gemini, openrouter, groq
+// Configuración por .env:
+//   AI__ProviderChain=openrouter,groq,gemini,anthropic    (chain)
+//   AI__Provider=openrouter                                (legacy, un solo provider)
+
+var chainRaw = builder.Configuration["AI:ProviderChain"]
+    ?? Environment.GetEnvironmentVariable("AI__ProviderChain")
+    ?? builder.Configuration["AI:Provider"]
     ?? Environment.GetEnvironmentVariable("AI_PROVIDER")
-    ?? "gemini").ToLowerInvariant();
+    ?? "openrouter,groq,gemini,anthropic";
 
-Console.WriteLine($">> AI Provider seleccionado: {aiProvider}");
+var chain = chainRaw.Split(',', StringSplitOptions.RemoveEmptyEntries)
+    .Select(s => s.Trim().ToLowerInvariant())
+    .Where(s => !string.IsNullOrWhiteSpace(s))
+    .Distinct()
+    .ToList();
 
-string modeloSeleccionado;
-int timeoutProvider;
+Console.WriteLine($">> AI Provider Chain solicitado: [{string.Join(" → ", chain)}]");
 
-switch (aiProvider)
+// Tipos de providers registrados exitosamente (con key válida)
+var tiposRegistrados = new List<Type>();
+var resumenRegistro = new List<string>();
+
+foreach (var proveedor in chain)
 {
-    case "anthropic":
+    switch (proveedor)
     {
-        builder.Services.Configure<AnthropicOptions>(builder.Configuration.GetSection(AnthropicOptions.SectionName));
-        var opts = builder.Configuration.GetSection(AnthropicOptions.SectionName).Get<AnthropicOptions>()
-            ?? throw new InvalidOperationException("Configuración de Anthropic no encontrada");
-
-        var envKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
-        if (!string.IsNullOrWhiteSpace(envKey)) opts.ApiKey = envKey;
-
-        if (string.IsNullOrWhiteSpace(opts.ApiKey))
+        case "anthropic":
         {
-            throw new InvalidOperationException(
-                "ANTHROPIC_API_KEY no configurada. Define la variable de entorno o Anthropic:ApiKey en appsettings.");
+            var opts = builder.Configuration.GetSection(AnthropicOptions.SectionName).Get<AnthropicOptions>()
+                ?? new AnthropicOptions();
+            var envKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+            if (!string.IsNullOrWhiteSpace(envKey)) opts.ApiKey = envKey;
+
+            if (string.IsNullOrWhiteSpace(opts.ApiKey) || opts.ApiKey.StartsWith("sk-ant-PEGA"))
+            {
+                resumenRegistro.Add($"  [skip] anthropic       (sin API key)");
+                break;
+            }
+            builder.Services.Configure<AnthropicOptions>(builder.Configuration.GetSection(AnthropicOptions.SectionName));
+            builder.Services.AddSingleton(opts);
+            builder.Services.AddHttpClient<AnthropicProviderService>(c =>
+                c.Timeout = TimeSpan.FromSeconds(opts.TimeoutSegundos));
+            tiposRegistrados.Add(typeof(AnthropicProviderService));
+            resumenRegistro.Add($"  [ok]   anthropic       ({opts.Modelo})");
+            break;
         }
 
-        builder.Services.AddSingleton(opts);
-        builder.Services.AddHttpClient<IAIProviderService, AnthropicProviderService>(client =>
+        case "gemini":
         {
-            client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSegundos);
-        });
+            var opts = builder.Configuration.GetSection(GeminiOptions.SectionName).Get<GeminiOptions>()
+                ?? new GeminiOptions();
+            var envKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
+            if (!string.IsNullOrWhiteSpace(envKey)) opts.ApiKey = envKey;
 
-        modeloSeleccionado = opts.Modelo;
-        timeoutProvider = opts.TimeoutSegundos;
-        break;
-    }
-
-    case "gemini":
-    {
-        builder.Services.Configure<GeminiOptions>(builder.Configuration.GetSection(GeminiOptions.SectionName));
-        var opts = builder.Configuration.GetSection(GeminiOptions.SectionName).Get<GeminiOptions>()
-            ?? throw new InvalidOperationException("Configuración de Gemini no encontrada");
-
-        var envKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
-        if (!string.IsNullOrWhiteSpace(envKey)) opts.ApiKey = envKey;
-
-        if (string.IsNullOrWhiteSpace(opts.ApiKey))
-        {
-            throw new InvalidOperationException(
-                "GEMINI_API_KEY no configurada. Obtén una gratis en https://aistudio.google.com/apikey");
+            if (string.IsNullOrWhiteSpace(opts.ApiKey) || opts.ApiKey.StartsWith("AIza-PEGA"))
+            {
+                resumenRegistro.Add($"  [skip] gemini          (sin API key)");
+                break;
+            }
+            builder.Services.Configure<GeminiOptions>(builder.Configuration.GetSection(GeminiOptions.SectionName));
+            builder.Services.AddSingleton(opts);
+            builder.Services.AddHttpClient<GeminiProviderService>(c =>
+                c.Timeout = TimeSpan.FromSeconds(opts.TimeoutSegundos));
+            tiposRegistrados.Add(typeof(GeminiProviderService));
+            resumenRegistro.Add($"  [ok]   gemini          ({opts.Modelo})");
+            break;
         }
 
-        builder.Services.AddSingleton(opts);
-        builder.Services.AddHttpClient<IAIProviderService, GeminiProviderService>(client =>
+        case "openrouter":
         {
-            client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSegundos);
-        });
+            var opts = builder.Configuration.GetSection(OpenRouterOptions.SectionName).Get<OpenRouterOptions>()
+                ?? new OpenRouterOptions();
+            var envKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+            if (!string.IsNullOrWhiteSpace(envKey)) opts.ApiKey = envKey;
 
-        modeloSeleccionado = opts.Modelo;
-        timeoutProvider = opts.TimeoutSegundos;
-        break;
-    }
-
-    case "openrouter":
-    {
-        builder.Services.Configure<OpenRouterOptions>(builder.Configuration.GetSection(OpenRouterOptions.SectionName));
-        var opts = builder.Configuration.GetSection(OpenRouterOptions.SectionName).Get<OpenRouterOptions>()
-            ?? throw new InvalidOperationException("Configuración de OpenRouter no encontrada");
-
-        var envKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
-        if (!string.IsNullOrWhiteSpace(envKey)) opts.ApiKey = envKey;
-
-        if (string.IsNullOrWhiteSpace(opts.ApiKey))
-        {
-            throw new InvalidOperationException(
-                "OPENROUTER_API_KEY no configurada. Obtén una gratis en https://openrouter.ai/keys");
+            if (string.IsNullOrWhiteSpace(opts.ApiKey) || opts.ApiKey.StartsWith("sk-or-PEGA"))
+            {
+                resumenRegistro.Add($"  [skip] openrouter      (sin API key)");
+                break;
+            }
+            builder.Services.Configure<OpenRouterOptions>(builder.Configuration.GetSection(OpenRouterOptions.SectionName));
+            builder.Services.AddSingleton(opts);
+            builder.Services.AddHttpClient<OpenRouterProviderService>(c =>
+                c.Timeout = TimeSpan.FromSeconds(opts.TimeoutSegundos));
+            tiposRegistrados.Add(typeof(OpenRouterProviderService));
+            var fallbackCount = (opts.ModelosFallback?.Length ?? 0);
+            resumenRegistro.Add($"  [ok]   openrouter      ({opts.Modelo}, +{fallbackCount} fallbacks internos)");
+            break;
         }
 
-        builder.Services.AddSingleton(opts);
-        builder.Services.AddHttpClient<IAIProviderService, OpenRouterProviderService>(client =>
+        case "groq":
         {
-            client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSegundos);
-        });
+            var opts = builder.Configuration.GetSection(GroqOptions.SectionName).Get<GroqOptions>()
+                ?? new GroqOptions();
+            var envKey = Environment.GetEnvironmentVariable("GROQ_API_KEY");
+            if (!string.IsNullOrWhiteSpace(envKey)) opts.ApiKey = envKey;
 
-        modeloSeleccionado = opts.Modelo;
-        timeoutProvider = opts.TimeoutSegundos;
-        break;
-    }
-
-    case "groq":
-    {
-        builder.Services.Configure<GroqOptions>(builder.Configuration.GetSection(GroqOptions.SectionName));
-        var opts = builder.Configuration.GetSection(GroqOptions.SectionName).Get<GroqOptions>()
-            ?? throw new InvalidOperationException("Configuración de Groq no encontrada");
-
-        var envKey = Environment.GetEnvironmentVariable("GROQ_API_KEY");
-        if (!string.IsNullOrWhiteSpace(envKey)) opts.ApiKey = envKey;
-
-        if (string.IsNullOrWhiteSpace(opts.ApiKey))
-        {
-            throw new InvalidOperationException(
-                "GROQ_API_KEY no configurada. Obtén una gratis (sin tarjeta) en https://console.groq.com/keys");
+            if (string.IsNullOrWhiteSpace(opts.ApiKey) || opts.ApiKey.StartsWith("gsk-PEGA"))
+            {
+                resumenRegistro.Add($"  [skip] groq            (sin API key)");
+                break;
+            }
+            builder.Services.Configure<GroqOptions>(builder.Configuration.GetSection(GroqOptions.SectionName));
+            builder.Services.AddSingleton(opts);
+            builder.Services.AddHttpClient<GroqProviderService>(c =>
+                c.Timeout = TimeSpan.FromSeconds(opts.TimeoutSegundos));
+            tiposRegistrados.Add(typeof(GroqProviderService));
+            resumenRegistro.Add($"  [ok]   groq            ({opts.Modelo})");
+            break;
         }
 
-        builder.Services.AddSingleton(opts);
-        builder.Services.AddHttpClient<IAIProviderService, GroqProviderService>(client =>
-        {
-            client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSegundos);
-        });
-
-        modeloSeleccionado = opts.Modelo;
-        timeoutProvider = opts.TimeoutSegundos;
-        break;
+        default:
+            resumenRegistro.Add($"  [skip] {proveedor,-15} (desconocido)");
+            break;
     }
-
-    default:
-        throw new InvalidOperationException(
-            $"AI:Provider '{aiProvider}' no soportado. Valores válidos: anthropic | gemini | openrouter | groq");
 }
+
+Console.WriteLine(">> Registro de providers:");
+foreach (var linea in resumenRegistro) Console.WriteLine(linea);
+
+if (tiposRegistrados.Count == 0)
+{
+    throw new InvalidOperationException(
+        "No hay ningún proveedor de IA configurado con API key válida. " +
+        "Define al menos una: ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY o GROQ_API_KEY.");
+}
+
+// Registrar IAIProviderService:
+// - Si solo hay uno configurado, se resuelve directo (sin overhead del wrapper)
+// - Si hay varios, se envuelven en MultiProviderFallbackService
+if (tiposRegistrados.Count == 1)
+{
+    var tipoUnico = tiposRegistrados[0];
+    builder.Services.AddScoped<IAIProviderService>(sp =>
+        (IAIProviderService)sp.GetRequiredService(tipoUnico));
+}
+else
+{
+    builder.Services.AddScoped<IAIProviderService>(sp =>
+    {
+        var logger = sp.GetRequiredService<ILogger<MultiProviderFallbackService>>();
+        var proveedores = tiposRegistrados
+            .Select(t => (IAIProviderService)sp.GetRequiredService(t))
+            .ToList();
+        return new MultiProviderFallbackService(proveedores, logger);
+    });
+}
+
+var chainActivaResumen = string.Join(" → ",
+    tiposRegistrados.Select(t => t.Name.Replace("ProviderService", "").ToLowerInvariant()));
 
 // ============================================
 // 4. SERVICIOS DE APLICACIÓN (v2.0 Production)
@@ -354,7 +388,7 @@ Console.WriteLine($"""
     ║  ARQUITECTURA:                                          ║
     ║  • Clean Architecture                                     ║
     ║  • Pipeline: 3 etapas (Limpieza→Estructuración→HU)       ║
-    ║  • IA: {aiProvider,-10} ({modeloSeleccionado,-25})   ║
+    ║  • IA: {chainActivaResumen,-49} ║
     ║                                                          ║
     ║  PRODUCCIÓN:                                             ║
     ║  • Correlation ID: ✓                                     ║
