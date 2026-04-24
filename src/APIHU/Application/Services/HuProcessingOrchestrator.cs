@@ -243,72 +243,55 @@ public class HuProcessingOrchestrator : IHuProcessingOrchestrator
 
     private ResultadoLimpieza ParsearResultadoLimpieza(string respuesta)
     {
+        // Garantiza un resultado válido independientemente de lo que responda el modelo
+        ResultadoLimpieza FallbackTextoPlano(string texto, string? motivo = null)
+        {
+            if (!string.IsNullOrEmpty(motivo))
+                _logger.LogWarning("Limpieza: {Motivo}. Usando respuesta cruda como texto limpio.", motivo);
+            return new ResultadoLimpieza
+            {
+                Exitoso = true,
+                TextoLimpio = texto,
+                ElementosEliminados = new List<string>()
+            };
+        }
+
         try
         {
             respuesta = LimpiarRespuesta(respuesta);
-            
-            // Si la respuesta no empieza con { o [, es texto plano - usarla directamente
             var trimmed = respuesta.Trim();
+
             if (!trimmed.StartsWith("{") && !trimmed.StartsWith("["))
             {
-                _logger.LogWarning("La respuesta no es JSON válido, usando texto plano como texto limpio");
-                return new ResultadoLimpieza
-                {
-                    Exitoso = true,
-                    TextoLimpio = respuesta,
-                    ElementosEliminados = new List<string>()
-                };
+                return FallbackTextoPlano(respuesta, "respuesta no es JSON");
             }
-            
+
             var opciones = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-            return System.Text.Json.JsonSerializer.Deserialize<ResultadoLimpieza>(respuesta, opciones) 
-                ?? new ResultadoLimpieza { Exitoso = false, Error = "No se pudo parsear la respuesta" };
+            var parsed = System.Text.Json.JsonSerializer.Deserialize<ResultadoLimpieza>(respuesta, opciones);
+
+            // Si el JSON se parseó pero con schema distinto (TextoLimpio vacío), usar la respuesta cruda
+            if (parsed == null || string.IsNullOrWhiteSpace(parsed.TextoLimpio))
+            {
+                return FallbackTextoPlano(respuesta, "JSON sin campo textoLimpio útil");
+            }
+
+            parsed.Exitoso = true;
+            parsed.ElementosEliminados ??= new List<string>();
+            return parsed;
         }
         catch (System.Text.Json.JsonException ex)
         {
-            _logger.LogWarning(ex, "Error al parsear resultado de limpieza, usando texto plano");
-            return new ResultadoLimpieza 
-            { 
-                Exitoso = true, 
-                TextoLimpio = respuesta,
-                ElementosEliminados = new List<string>()
-            };
+            _logger.LogWarning(ex, "Error al parsear resultado de limpieza");
+            return FallbackTextoPlano(respuesta);
         }
     }
 
     private ResultadoEstructuracion ParsearResultadoEstructuracion(string respuesta)
     {
-        try
+        ResultadoEstructuracion FallbackTextoPlano(string texto, string? motivo = null)
         {
-            respuesta = LimpiarRespuesta(respuesta);
-            
-            // Si la respuesta no empieza con { o [, es texto plano - crear estructuración básica
-            var trimmed = respuesta.Trim();
-            if (!trimmed.StartsWith("{") && !trimmed.StartsWith("["))
-            {
-                _logger.LogWarning("La respuesta no es JSON válido, creando estructuración desde texto");
-                return new ResultadoEstructuracion
-                {
-                    Exitoso = true,
-                    Requerimientos = new List<Requerimiento>
-                    {
-                        new Requerimiento
-                        {
-                            Nombre = "Requerimiento detectado",
-                            Descripcion = respuesta.Length > 500 ? respuesta.Substring(0, 500) : respuesta,
-                            Categoria = "General"
-                        }
-                    }
-                };
-            }
-            
-            var opciones = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-            return System.Text.Json.JsonSerializer.Deserialize<ResultadoEstructuracion>(respuesta, opciones)
-                ?? new ResultadoEstructuracion { Exitoso = false, Error = "No se pudo parsear la respuesta" };
-        }
-        catch (System.Text.Json.JsonException ex)
-        {
-            _logger.LogWarning(ex, "Error al parsear resultado de estructuración, usando texto plano");
+            if (!string.IsNullOrEmpty(motivo))
+                _logger.LogWarning("Estructuración: {Motivo}. Creando requerimiento único desde texto crudo.", motivo);
             return new ResultadoEstructuracion
             {
                 Exitoso = true,
@@ -317,11 +300,38 @@ public class HuProcessingOrchestrator : IHuProcessingOrchestrator
                     new Requerimiento
                     {
                         Nombre = "Requerimiento detectado",
-                        Descripcion = respuesta.Length > 500 ? respuesta.Substring(0, 500) : respuesta,
+                        Descripcion = texto.Length > 500 ? texto.Substring(0, 500) : texto,
                         Categoria = "General"
                     }
                 }
             };
+        }
+
+        try
+        {
+            respuesta = LimpiarRespuesta(respuesta);
+            var trimmed = respuesta.Trim();
+
+            if (!trimmed.StartsWith("{") && !trimmed.StartsWith("["))
+            {
+                return FallbackTextoPlano(respuesta, "respuesta no es JSON");
+            }
+
+            var opciones = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var parsed = System.Text.Json.JsonSerializer.Deserialize<ResultadoEstructuracion>(respuesta, opciones);
+
+            if (parsed == null || parsed.Requerimientos == null || parsed.Requerimientos.Count == 0)
+            {
+                return FallbackTextoPlano(respuesta, "JSON sin requerimientos útiles");
+            }
+
+            parsed.Exitoso = true;
+            return parsed;
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            _logger.LogWarning(ex, "Error al parsear resultado de estructuración");
+            return FallbackTextoPlano(respuesta);
         }
     }
 

@@ -25,13 +25,20 @@ public class OpenRouterOptions
     public string BaseUrl { get; set; } = "https://openrouter.ai/api/v1";
 
     /// <summary>
-    /// Modelo a utilizar. Ejemplos de modelos free:
-    ///   deepseek/deepseek-chat:free
-    ///   meta-llama/llama-3.3-70b-instruct:free
-    ///   google/gemini-2.0-flash-exp:free
+    /// Modelo principal a utilizar. Ejemplos de modelos free (inestables, rotan):
+    ///   google/gemma-3-27b-it:free
+    ///   qwen/qwen3-next-80b-a3b-instruct:free
+    ///   openai/gpt-oss-120b:free
+    ///   inclusionai/ling-2.6-flash:free
     /// Modelos de pago también soportados (sin sufijo :free).
     /// </summary>
-    public string Modelo { get; set; } = "deepseek/deepseek-chat:free";
+    public string Modelo { get; set; } = "google/gemma-3-27b-it:free";
+
+    /// <summary>
+    /// Modelos alternativos si el principal falla con 429/503/out_tokens=0.
+    /// Se prueban en orden. Útil para tier :free donde los modelos saturan.
+    /// </summary>
+    public string[] ModelosFallback { get; set; } = Array.Empty<string>();
 
     /// <summary>
     /// Temperatura (0.0 - 2.0)
@@ -80,8 +87,13 @@ public class OpenRouterProviderService : IAIProviderService
     private readonly ILogger<OpenRouterProviderService> _logger;
 
     public string NombreProveedor => "OpenRouter";
-    public string ModeloActual => _options.Modelo;
+    public string ModeloActual => _modeloEnUso;
     public UsoTokens UltimoUso { get; private set; } = UsoTokens.Vacio;
+
+    /// <summary>
+    /// Modelo efectivamente usado en la última llamada (puede diferir de Options.Modelo si cayó a fallback)
+    /// </summary>
+    private string _modeloEnUso;
 
     public OpenRouterProviderService(
         HttpClient httpClient,
@@ -91,6 +103,7 @@ public class OpenRouterProviderService : IAIProviderService
         _httpClient = httpClient;
         _options = options;
         _logger = logger;
+        _modeloEnUso = options.Modelo;
 
         if (string.IsNullOrWhiteSpace(_options.ApiKey))
         {
@@ -118,57 +131,87 @@ public class OpenRouterProviderService : IAIProviderService
             throw new ArgumentException("El prompt no puede estar vacío", nameof(prompt));
         }
 
+        // Ordena: primero el modelo principal, luego cada fallback
+        var modelosAProbar = new List<string> { _options.Modelo };
+        modelosAProbar.AddRange(_options.ModelosFallback ?? Array.Empty<string>());
+
         Exception? ultimaExcepcion = null;
 
-        for (var intento = 1; intento <= _options.MaximoReintentos; intento++)
+        for (var idx = 0; idx < modelosAProbar.Count; idx++)
         {
-            try
+            var modelo = modelosAProbar[idx];
+            var esFallback = idx > 0;
+
+            if (esFallback)
             {
-                _logger.LogInformation(
-                    "Enviando prompt a OpenRouter ({Modelo}) - intento {Intento}/{Max}",
-                    _options.Modelo, intento, _options.MaximoReintentos);
-
-                var respuesta = await EjecutarRequestAsync(prompt, cancellationToken);
-
-                _logger.LogInformation(
-                    "Respuesta de OpenRouter OK. Tokens: in={In}, out={Out}, total={Total}",
-                    UltimoUso.InputTokens, UltimoUso.OutputTokens, UltimoUso.Total);
-
-                return respuesta;
-            }
-            catch (OpenRouterTransientException ex) when (intento < _options.MaximoReintentos)
-            {
-                ultimaExcepcion = ex;
-                var espera = CalcularBackoff(intento, ex.RetryAfter);
                 _logger.LogWarning(
-                    "Error transitorio de OpenRouter (intento {Intento}): {Mensaje}. Reintentando en {Espera}ms",
-                    intento, ex.Message, espera);
-                await Task.Delay(espera, cancellationToken);
+                    "Modelo principal agotado. Intentando fallback #{Idx}: {Modelo}",
+                    idx, modelo);
             }
-            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested && intento < _options.MaximoReintentos)
+
+            for (var intento = 1; intento <= _options.MaximoReintentos; intento++)
             {
-                ultimaExcepcion = ex;
-                var espera = CalcularBackoff(intento, null);
-                _logger.LogWarning(
-                    "Timeout en OpenRouter (intento {Intento}). Reintentando en {Espera}ms",
-                    intento, espera);
-                await Task.Delay(espera, cancellationToken);
+                try
+                {
+                    _logger.LogInformation(
+                        "Enviando prompt a OpenRouter ({Modelo}) - intento {Intento}/{Max}",
+                        modelo, intento, _options.MaximoReintentos);
+
+                    var respuesta = await EjecutarRequestAsync(prompt, modelo, cancellationToken);
+
+                    _modeloEnUso = modelo;
+
+                    _logger.LogInformation(
+                        "Respuesta de OpenRouter OK [{Modelo}]. Tokens: in={In}, out={Out}, total={Total}",
+                        modelo, UltimoUso.InputTokens, UltimoUso.OutputTokens, UltimoUso.Total);
+
+                    return respuesta;
+                }
+                catch (OpenRouterTransientException ex) when (intento < _options.MaximoReintentos)
+                {
+                    ultimaExcepcion = ex;
+                    var espera = CalcularBackoff(intento, ex.RetryAfter);
+                    _logger.LogWarning(
+                        "Error transitorio en {Modelo} (intento {Intento}): {Mensaje}. Reintentando en {Espera}ms",
+                        modelo, intento, ex.Message, espera);
+                    await Task.Delay(espera, cancellationToken);
+                }
+                catch (OpenRouterTransientException ex)
+                {
+                    // Agotamos retries de este modelo -> caer al siguiente fallback
+                    ultimaExcepcion = ex;
+                    _logger.LogWarning(
+                        "Modelo {Modelo} agotó {Max} reintentos. {Restantes} fallback(s) restante(s).",
+                        modelo, _options.MaximoReintentos, modelosAProbar.Count - idx - 1);
+                    break;
+                }
+                catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested && intento < _options.MaximoReintentos)
+                {
+                    ultimaExcepcion = ex;
+                    var espera = CalcularBackoff(intento, null);
+                    _logger.LogWarning(
+                        "Timeout en {Modelo} (intento {Intento}). Reintentando en {Espera}ms",
+                        modelo, intento, espera);
+                    await Task.Delay(espera, cancellationToken);
+                }
             }
         }
 
-        _logger.LogError(ultimaExcepcion, "Fallaron todos los {Max} intentos contra OpenRouter", _options.MaximoReintentos);
+        _logger.LogError(ultimaExcepcion,
+            "Fallaron todos los modelos ({Count}) contra OpenRouter",
+            modelosAProbar.Count);
         throw new InvalidOperationException(
-            $"No se pudo obtener respuesta de OpenRouter después de {_options.MaximoReintentos} intentos",
+            $"No se pudo obtener respuesta de OpenRouter después de probar {modelosAProbar.Count} modelo(s) con {_options.MaximoReintentos} reintento(s) cada uno",
             ultimaExcepcion);
     }
 
-    private async Task<string> EjecutarRequestAsync(string prompt, CancellationToken cancellationToken)
+    private async Task<string> EjecutarRequestAsync(string prompt, string modelo, CancellationToken cancellationToken)
     {
         var endpoint = $"{_options.BaseUrl}/chat/completions";
 
         var requestBody = new OpenRouterRequest
         {
-            Model = _options.Modelo,
+            Model = modelo,
             Temperature = _options.Temperatura,
             MaxTokens = _options.MaxTokens,
             Messages = new[]
@@ -209,9 +252,12 @@ public class OpenRouterProviderService : IAIProviderService
             parsed.Usage?.CompletionTokens ?? 0);
 
         var texto = parsed.Choices[0].Message?.Content;
-        if (string.IsNullOrWhiteSpace(texto))
+
+        // Modelo respondió vacío → tratar como transitorio para permitir fallback a otro modelo
+        if (string.IsNullOrWhiteSpace(texto) || UltimoUso.OutputTokens == 0)
         {
-            throw new InvalidOperationException("Respuesta de OpenRouter sin contenido en el mensaje");
+            throw new OpenRouterTransientException(
+                "Respuesta vacía de OpenRouter (out_tokens=0). El modelo puede estar degradado.");
         }
 
         return texto;
@@ -248,8 +294,9 @@ public class OpenRouterProviderService : IAIProviderService
                 throw new InvalidOperationException(
                     $"Request inválido a OpenRouter (400): {Truncar(body, 300)}");
             case 404:
-                throw new InvalidOperationException(
-                    $"Modelo no encontrado en OpenRouter (404). Modelo actual: '{_options.Modelo}'.");
+                // Modelo retirado / no disponible → tratar como transitorio para caer a fallback
+                throw new OpenRouterTransientException(
+                    $"Modelo no encontrado en OpenRouter (404). Probando fallback si existe.");
             default:
                 throw new InvalidOperationException(
                     $"Error no manejado de OpenRouter ({(int)status}): {Truncar(body, 300)}");

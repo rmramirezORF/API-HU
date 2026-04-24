@@ -169,9 +169,35 @@ switch (aiProvider)
         break;
     }
 
+    case "groq":
+    {
+        builder.Services.Configure<GroqOptions>(builder.Configuration.GetSection(GroqOptions.SectionName));
+        var opts = builder.Configuration.GetSection(GroqOptions.SectionName).Get<GroqOptions>()
+            ?? throw new InvalidOperationException("Configuración de Groq no encontrada");
+
+        var envKey = Environment.GetEnvironmentVariable("GROQ_API_KEY");
+        if (!string.IsNullOrWhiteSpace(envKey)) opts.ApiKey = envKey;
+
+        if (string.IsNullOrWhiteSpace(opts.ApiKey))
+        {
+            throw new InvalidOperationException(
+                "GROQ_API_KEY no configurada. Obtén una gratis (sin tarjeta) en https://console.groq.com/keys");
+        }
+
+        builder.Services.AddSingleton(opts);
+        builder.Services.AddHttpClient<IAIProviderService, GroqProviderService>(client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(opts.TimeoutSegundos);
+        });
+
+        modeloSeleccionado = opts.Modelo;
+        timeoutProvider = opts.TimeoutSegundos;
+        break;
+    }
+
     default:
         throw new InvalidOperationException(
-            $"AI:Provider '{aiProvider}' no soportado. Valores válidos: anthropic | gemini | openrouter");
+            $"AI:Provider '{aiProvider}' no soportado. Valores válidos: anthropic | gemini | openrouter | groq");
 }
 
 // ============================================
