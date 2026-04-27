@@ -3,6 +3,7 @@ using APIHU.Application.Interfaces;
 using APIHU.Application.Services;
 using APIHU.Domain.Interfaces;
 using APIHU.Infrastructure.AI;
+using APIHU.Infrastructure.Formatters;
 using APIHU.Infrastructure.Logging;
 using APIHU.Infrastructure.Middleware;
 using APIHU.Infrastructure.Persistence;
@@ -27,7 +28,12 @@ LoggingConfiguration.ConfigureLogging(builder);
 // ============================================
 
 // Controllers
-builder.Services.AddControllers();
+builder.Services.AddControllers(options =>
+{
+    // Permite a los controllers aceptar bodies tipo text/plain (necesario para
+    // el endpoint POST /api/hu/generate-from-text).
+    options.InputFormatters.Insert(0, new TextPlainInputFormatter());
+});
 
 // Swagger mejorado
 builder.Services.AddEndpointsApiExplorer();

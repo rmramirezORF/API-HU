@@ -95,19 +95,13 @@ public class HUController : ControllerBase
     [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status500InternalServerError)]
     public async Task<ActionResult<GenerarHUResponse>> GenerarHUFromText(
+        [FromBody] string texto,
         [FromQuery] string? proyecto = null,
         [FromQuery] int? maximoHUs = null,
         [FromQuery] string? idioma = "es",
         [FromQuery] string? versionPrompt = "v1",
         CancellationToken cancellationToken = default)
     {
-        // Leer el texto plano del body
-        string texto;
-        using (var reader = new StreamReader(Request.Body))
-        {
-            texto = await reader.ReadToEndAsync(cancellationToken);
-        }
-
         if (string.IsNullOrWhiteSpace(texto))
         {
             return BadRequest(new ErrorResponse
@@ -117,22 +111,13 @@ public class HUController : ControllerBase
             });
         }
 
-        var request = new GenerarHURequest
-        {
-            Texto = texto,
-            Proyecto = proyecto,
-            MaximoHUs = maximoHUs,
-            Idioma = idioma,
-            VersionPrompt = versionPrompt
-        };
-
-        // Validar manualmente porque al ser texto plano, [ApiController] no aplica DataAnnotations al body
+        // Validaciones manuales (DataAnnotations no aplican a string del body en text/plain)
         if (texto.Length < 20)
         {
             return BadRequest(new ErrorResponse
             {
                 Tipo = "ValidationError",
-                Mensaje = "El texto debe tener al menos 20 caracteres."
+                Mensaje = $"El texto debe tener al menos 20 caracteres (actual: {texto.Length})."
             });
         }
         if (texto.Length > 10_000)
@@ -151,6 +136,15 @@ public class HUController : ControllerBase
                 Mensaje = "maximoHUs debe estar entre 1 y 20."
             });
         }
+
+        var request = new GenerarHURequest
+        {
+            Texto = texto,
+            Proyecto = proyecto,
+            MaximoHUs = maximoHUs,
+            Idioma = idioma,
+            VersionPrompt = versionPrompt
+        };
 
         return await EjecutarGeneracionAsync(request, cancellationToken);
     }
