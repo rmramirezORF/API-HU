@@ -24,12 +24,18 @@ public class GeminiOptions
     public string BaseUrl { get; set; } = "https://generativelanguage.googleapis.com/v1beta";
 
     /// <summary>
-    /// Modelo a utilizar. Modelos con free tier activo (abril 2026):
+    /// Modelo principal. Modelos con free tier activo (abril 2026):
     ///   gemini-2.5-flash       (recomendado - con thinking interno)
     ///   gemini-2.5-flash-lite  (más rápido y ligero)
     /// Los modelos gemini-1.5-* y gemini-2.0-flash ya NO tienen free tier.
     /// </summary>
     public string Modelo { get; set; } = "gemini-2.5-flash";
+
+    /// <summary>
+    /// Modelos alternativos si el principal falla con 429 o timeout.
+    /// Se prueban en orden tras agotar los reintentos del principal.
+    /// </summary>
+    public string[] ModelosFallback { get; set; } = Array.Empty<string>();
 
     /// <summary>
     /// Temperatura (0.0 - 2.0 en Gemini, recomendado 0.0 - 1.0).
@@ -44,19 +50,21 @@ public class GeminiOptions
     public int MaxTokens { get; set; } = 4096;
 
     /// <summary>
-    /// Número máximo de reintentos ante errores transitorios
+    /// Número máximo de intentos por modelo (1 = un solo intento, sin retry).
+    /// Mantener bajo para que el fallback a otros modelos sea rápido.
     /// </summary>
-    public int MaximoReintentos { get; set; } = 3;
+    public int MaximoReintentos { get; set; } = 1;
 
     /// <summary>
     /// Tiempo base de espera entre reintentos (ms). Se multiplica exponencialmente.
     /// </summary>
-    public int BackoffBaseMs { get; set; } = 1000;
+    public int BackoffBaseMs { get; set; } = 500;
 
     /// <summary>
-    /// Timeout de cada request individual en segundos
+    /// Timeout de cada request individual en segundos. Mantener moderado (60s)
+    /// para no bloquearnos cuando un modelo free responde lento.
     /// </summary>
-    public int TimeoutSegundos { get; set; } = 120;
+    public int TimeoutSegundos { get; set; } = 60;
 
     /// <summary>
     /// Solo aplica a modelos Gemini 2.5+. Cantidad de tokens que el modelo puede usar
@@ -80,8 +88,10 @@ public class GeminiProviderService : IAIProviderService
     private readonly ILogger<GeminiProviderService> _logger;
 
     public string NombreProveedor => "Gemini";
-    public string ModeloActual => _options.Modelo;
+    public string ModeloActual => _modeloEnUso;
     public UsoTokens UltimoUso { get; private set; } = UsoTokens.Vacio;
+
+    private string _modeloEnUso;
 
     public GeminiProviderService(
         HttpClient httpClient,
@@ -91,6 +101,7 @@ public class GeminiProviderService : IAIProviderService
         _httpClient = httpClient;
         _options = options;
         _logger = logger;
+        _modeloEnUso = options.Modelo;
 
         if (string.IsNullOrWhiteSpace(_options.ApiKey))
         {
@@ -107,53 +118,87 @@ public class GeminiProviderService : IAIProviderService
             throw new ArgumentException("El prompt no puede estar vacío", nameof(prompt));
         }
 
+        var modelosAProbar = new List<string> { _options.Modelo };
+        modelosAProbar.AddRange(_options.ModelosFallback ?? Array.Empty<string>());
+
         Exception? ultimaExcepcion = null;
 
-        for (var intento = 1; intento <= _options.MaximoReintentos; intento++)
+        for (var idx = 0; idx < modelosAProbar.Count; idx++)
         {
-            try
+            var modelo = modelosAProbar[idx];
+            var esFallback = idx > 0;
+
+            if (esFallback)
             {
-                _logger.LogInformation(
-                    "Enviando prompt a Gemini ({Modelo}) - intento {Intento}/{Max}",
-                    _options.Modelo, intento, _options.MaximoReintentos);
-
-                var respuesta = await EjecutarRequestAsync(prompt, cancellationToken);
-
-                _logger.LogInformation(
-                    "Respuesta de Gemini OK. Tokens: in={In}, out={Out}, total={Total}",
-                    UltimoUso.InputTokens, UltimoUso.OutputTokens, UltimoUso.Total);
-
-                return respuesta;
-            }
-            catch (GeminiTransientException ex) when (intento < _options.MaximoReintentos)
-            {
-                ultimaExcepcion = ex;
-                var espera = CalcularBackoff(intento, ex.RetryAfter);
                 _logger.LogWarning(
-                    "Error transitorio de Gemini (intento {Intento}): {Mensaje}. Reintentando en {Espera}ms",
-                    intento, ex.Message, espera);
-                await Task.Delay(espera, cancellationToken);
+                    "Modelo Gemini agotado. Intentando fallback #{Idx}: {Modelo}", idx, modelo);
             }
-            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested && intento < _options.MaximoReintentos)
+
+            for (var intento = 1; intento <= _options.MaximoReintentos; intento++)
             {
-                ultimaExcepcion = ex;
-                var espera = CalcularBackoff(intento, null);
-                _logger.LogWarning(
-                    "Timeout en Gemini (intento {Intento}). Reintentando en {Espera}ms",
-                    intento, espera);
-                await Task.Delay(espera, cancellationToken);
+                try
+                {
+                    _logger.LogInformation(
+                        "Enviando prompt a Gemini ({Modelo}) - intento {Intento}/{Max}",
+                        modelo, intento, _options.MaximoReintentos);
+
+                    var respuesta = await EjecutarRequestAsync(prompt, modelo, cancellationToken);
+                    _modeloEnUso = modelo;
+
+                    _logger.LogInformation(
+                        "Respuesta de Gemini OK [{Modelo}]. Tokens: in={In}, out={Out}, total={Total}",
+                        modelo, UltimoUso.InputTokens, UltimoUso.OutputTokens, UltimoUso.Total);
+
+                    return respuesta;
+                }
+                catch (GeminiTransientException ex) when (intento < _options.MaximoReintentos)
+                {
+                    ultimaExcepcion = ex;
+                    var espera = CalcularBackoff(intento, ex.RetryAfter);
+                    _logger.LogWarning(
+                        "Error transitorio en {Modelo} (intento {Intento}): {Mensaje}. Reintentando en {Espera}ms",
+                        modelo, intento, ex.Message, espera);
+                    await Task.Delay(espera, cancellationToken);
+                }
+                catch (GeminiTransientException ex)
+                {
+                    ultimaExcepcion = ex;
+                    _logger.LogWarning(
+                        "Modelo {Modelo} agotó {Max} reintentos. {Restantes} fallback(s) restante(s).",
+                        modelo, _options.MaximoReintentos, modelosAProbar.Count - idx - 1);
+                    break;
+                }
+                catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested && intento < _options.MaximoReintentos)
+                {
+                    ultimaExcepcion = ex;
+                    var espera = CalcularBackoff(intento, null);
+                    _logger.LogWarning(
+                        "Timeout en {Modelo} (intento {Intento}). Reintentando en {Espera}ms",
+                        modelo, intento, espera);
+                    await Task.Delay(espera, cancellationToken);
+                }
+                catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    ultimaExcepcion = ex;
+                    _logger.LogWarning(
+                        "Timeout final en {Modelo}. {Restantes} fallback(s) restante(s).",
+                        modelo, modelosAProbar.Count - idx - 1);
+                    break;
+                }
             }
         }
 
-        _logger.LogError(ultimaExcepcion, "Fallaron todos los {Max} intentos contra Gemini", _options.MaximoReintentos);
+        _logger.LogError(ultimaExcepcion,
+            "Fallaron todos los modelos ({Count}) de Gemini",
+            modelosAProbar.Count);
         throw new InvalidOperationException(
-            $"No se pudo obtener respuesta de Gemini después de {_options.MaximoReintentos} intentos",
+            $"No se pudo obtener respuesta de Gemini tras probar {modelosAProbar.Count} modelo(s)",
             ultimaExcepcion);
     }
 
-    private async Task<string> EjecutarRequestAsync(string prompt, CancellationToken cancellationToken)
+    private async Task<string> EjecutarRequestAsync(string prompt, string modelo, CancellationToken cancellationToken)
     {
-        var endpoint = $"{_options.BaseUrl}/models/{_options.Modelo}:generateContent";
+        var endpoint = $"{_options.BaseUrl}/models/{modelo}:generateContent";
 
         var generationConfig = new GeminiGenerationConfig
         {
@@ -163,7 +208,7 @@ public class GeminiProviderService : IAIProviderService
 
         // Gemini 2.5+ soporta thinkingConfig. Para nuestro caso (JSON estructurado)
         // es mejor desactivarlo para no gastar tokens en razonamiento oculto.
-        if (_options.Modelo.Contains("2.5", StringComparison.OrdinalIgnoreCase))
+        if (modelo.Contains("2.5", StringComparison.OrdinalIgnoreCase))
         {
             generationConfig.ThinkingConfig = new GeminiThinkingConfig
             {
@@ -258,8 +303,9 @@ public class GeminiProviderService : IAIProviderService
                 throw new InvalidOperationException(
                     $"Request inválido a Gemini (400): {Truncar(body, 300)}");
             case 404:
-                throw new InvalidOperationException(
-                    $"Modelo no encontrado en Gemini (404). Modelo actual: '{_options.Modelo}'.");
+                // Modelo retirado / no disponible → tratar como transitorio para caer a fallback
+                throw new GeminiTransientException(
+                    $"Modelo no encontrado en Gemini (404). Probando fallback si existe.");
             default:
                 throw new InvalidOperationException(
                     $"Error no manejado de Gemini ({(int)status}): {Truncar(body, 300)}");

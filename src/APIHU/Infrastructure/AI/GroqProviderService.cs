@@ -25,24 +25,32 @@ public class GroqOptions
     public string BaseUrl { get; set; } = "https://api.groq.com/openai/v1";
 
     /// <summary>
-    /// Modelo a utilizar. Recomendados free:
-    ///   llama-3.3-70b-versatile  (mejor calidad, 30 req/min free)
-    ///   llama-3.1-8b-instant     (mucho más rápido, 30 req/min free)
-    ///   mixtral-8x7b-32768
-    ///   gemma2-9b-it
+    /// Modelo principal. Recomendados free:
+    ///   llama-3.3-70b-versatile       (mejor calidad)
+    ///   llama-3.1-8b-instant          (más rápido)
+    ///   openai/gpt-oss-120b           (GPT-OSS grande)
+    ///   openai/gpt-oss-20b            (GPT-OSS pequeño)
+    ///   qwen/qwen3-32b                (Qwen 32B)
     /// </summary>
     public string Modelo { get; set; } = "llama-3.3-70b-versatile";
 
+    /// <summary>
+    /// Modelos alternativos si el principal falla con 429 o timeout.
+    /// Se prueban en orden tras agotar los reintentos del principal.
+    /// </summary>
+    public string[] ModelosFallback { get; set; } = Array.Empty<string>();
+
     public double Temperatura { get; set; } = 0.1;
     public int MaxTokens { get; set; } = 4096;
-    public int MaximoReintentos { get; set; } = 3;
-    public int BackoffBaseMs { get; set; } = 1000;
-    public int TimeoutSegundos { get; set; } = 120;
+    public int MaximoReintentos { get; set; } = 1;
+    public int BackoffBaseMs { get; set; } = 500;
+    public int TimeoutSegundos { get; set; } = 60;
 }
 
 /// <summary>
 /// Proveedor de IA usando Groq Cloud (free tier estable, sin tarjeta).
-/// Infraestructura propia de Groq (LPU) → respuestas muy rápidas.
+/// Infraestructura propia de Groq (LPU) → respuestas muy rápidas cuando el modelo
+/// principal o alguno de los fallback está disponible.
 /// </summary>
 public class GroqProviderService : IAIProviderService
 {
@@ -51,8 +59,10 @@ public class GroqProviderService : IAIProviderService
     private readonly ILogger<GroqProviderService> _logger;
 
     public string NombreProveedor => "Groq";
-    public string ModeloActual => _options.Modelo;
+    public string ModeloActual => _modeloEnUso;
     public UsoTokens UltimoUso { get; private set; } = UsoTokens.Vacio;
+
+    private string _modeloEnUso;
 
     public GroqProviderService(
         HttpClient httpClient,
@@ -62,6 +72,7 @@ public class GroqProviderService : IAIProviderService
         _httpClient = httpClient;
         _options = options;
         _logger = logger;
+        _modeloEnUso = options.Modelo;
 
         if (string.IsNullOrWhiteSpace(_options.ApiKey))
         {
@@ -80,57 +91,91 @@ public class GroqProviderService : IAIProviderService
             throw new ArgumentException("El prompt no puede estar vacío", nameof(prompt));
         }
 
+        var modelosAProbar = new List<string> { _options.Modelo };
+        modelosAProbar.AddRange(_options.ModelosFallback ?? Array.Empty<string>());
+
         Exception? ultimaExcepcion = null;
 
-        for (var intento = 1; intento <= _options.MaximoReintentos; intento++)
+        for (var idx = 0; idx < modelosAProbar.Count; idx++)
         {
-            try
+            var modelo = modelosAProbar[idx];
+            var esFallback = idx > 0;
+
+            if (esFallback)
             {
-                _logger.LogInformation(
-                    "Enviando prompt a Groq ({Modelo}) - intento {Intento}/{Max}",
-                    _options.Modelo, intento, _options.MaximoReintentos);
-
-                var respuesta = await EjecutarRequestAsync(prompt, cancellationToken);
-
-                _logger.LogInformation(
-                    "Respuesta de Groq OK. Tokens: in={In}, out={Out}, total={Total}",
-                    UltimoUso.InputTokens, UltimoUso.OutputTokens, UltimoUso.Total);
-
-                return respuesta;
-            }
-            catch (GroqTransientException ex) when (intento < _options.MaximoReintentos)
-            {
-                ultimaExcepcion = ex;
-                var espera = CalcularBackoff(intento, ex.RetryAfter);
                 _logger.LogWarning(
-                    "Error transitorio de Groq (intento {Intento}): {Mensaje}. Reintentando en {Espera}ms",
-                    intento, ex.Message, espera);
-                await Task.Delay(espera, cancellationToken);
+                    "Modelo Groq agotado. Intentando fallback #{Idx}: {Modelo}", idx, modelo);
             }
-            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested && intento < _options.MaximoReintentos)
+
+            for (var intento = 1; intento <= _options.MaximoReintentos; intento++)
             {
-                ultimaExcepcion = ex;
-                var espera = CalcularBackoff(intento, null);
-                _logger.LogWarning(
-                    "Timeout en Groq (intento {Intento}). Reintentando en {Espera}ms",
-                    intento, espera);
-                await Task.Delay(espera, cancellationToken);
+                try
+                {
+                    _logger.LogInformation(
+                        "Enviando prompt a Groq ({Modelo}) - intento {Intento}/{Max}",
+                        modelo, intento, _options.MaximoReintentos);
+
+                    var respuesta = await EjecutarRequestAsync(prompt, modelo, cancellationToken);
+                    _modeloEnUso = modelo;
+
+                    _logger.LogInformation(
+                        "Respuesta de Groq OK [{Modelo}]. Tokens: in={In}, out={Out}, total={Total}",
+                        modelo, UltimoUso.InputTokens, UltimoUso.OutputTokens, UltimoUso.Total);
+
+                    return respuesta;
+                }
+                catch (GroqTransientException ex) when (intento < _options.MaximoReintentos)
+                {
+                    ultimaExcepcion = ex;
+                    var espera = CalcularBackoff(intento, ex.RetryAfter);
+                    _logger.LogWarning(
+                        "Error transitorio en {Modelo} (intento {Intento}): {Mensaje}. Reintentando en {Espera}ms",
+                        modelo, intento, ex.Message, espera);
+                    await Task.Delay(espera, cancellationToken);
+                }
+                catch (GroqTransientException ex)
+                {
+                    ultimaExcepcion = ex;
+                    _logger.LogWarning(
+                        "Modelo {Modelo} agotó {Max} reintentos. {Restantes} fallback(s) restante(s).",
+                        modelo, _options.MaximoReintentos, modelosAProbar.Count - idx - 1);
+                    break;
+                }
+                catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested && intento < _options.MaximoReintentos)
+                {
+                    ultimaExcepcion = ex;
+                    var espera = CalcularBackoff(intento, null);
+                    _logger.LogWarning(
+                        "Timeout en {Modelo} (intento {Intento}). Reintentando en {Espera}ms",
+                        modelo, intento, espera);
+                    await Task.Delay(espera, cancellationToken);
+                }
+                catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    ultimaExcepcion = ex;
+                    _logger.LogWarning(
+                        "Timeout final en {Modelo}. {Restantes} fallback(s) restante(s).",
+                        modelo, modelosAProbar.Count - idx - 1);
+                    break;
+                }
             }
         }
 
-        _logger.LogError(ultimaExcepcion, "Fallaron todos los {Max} intentos contra Groq", _options.MaximoReintentos);
+        _logger.LogError(ultimaExcepcion,
+            "Fallaron todos los modelos ({Count}) de Groq",
+            modelosAProbar.Count);
         throw new InvalidOperationException(
-            $"No se pudo obtener respuesta de Groq después de {_options.MaximoReintentos} intentos",
+            $"No se pudo obtener respuesta de Groq tras probar {modelosAProbar.Count} modelo(s)",
             ultimaExcepcion);
     }
 
-    private async Task<string> EjecutarRequestAsync(string prompt, CancellationToken cancellationToken)
+    private async Task<string> EjecutarRequestAsync(string prompt, string modelo, CancellationToken cancellationToken)
     {
         var endpoint = $"{_options.BaseUrl}/chat/completions";
 
         var requestBody = new
         {
-            model = _options.Modelo,
+            model = modelo,
             temperature = _options.Temperatura,
             max_tokens = _options.MaxTokens,
             messages = new[] { new { role = "user", content = prompt } }
@@ -168,9 +213,12 @@ public class GroqProviderService : IAIProviderService
             parsed.Usage?.CompletionTokens ?? 0);
 
         var texto = parsed.Choices[0].Message?.Content;
-        if (string.IsNullOrWhiteSpace(texto))
+
+        // Modelo respondió vacío → tratar como transitorio para permitir fallback
+        if (string.IsNullOrWhiteSpace(texto) || UltimoUso.OutputTokens == 0)
         {
-            throw new InvalidOperationException("Respuesta de Groq sin contenido en el mensaje");
+            throw new GroqTransientException(
+                "Respuesta vacía de Groq (out_tokens=0). El modelo puede estar degradado.");
         }
 
         return texto;
@@ -203,8 +251,9 @@ public class GroqProviderService : IAIProviderService
                 throw new InvalidOperationException(
                     $"Request inválido a Groq (400): {Truncar(body, 300)}");
             case 404:
-                throw new InvalidOperationException(
-                    $"Modelo no encontrado en Groq (404). Modelo actual: '{_options.Modelo}'.");
+                // Modelo retirado → tratar como transitorio para caer a fallback
+                throw new GroqTransientException(
+                    $"Modelo no encontrado en Groq (404). Probando fallback si existe.");
             default:
                 throw new InvalidOperationException(
                     $"Error no manejado de Groq ({(int)status}): {Truncar(body, 300)}");

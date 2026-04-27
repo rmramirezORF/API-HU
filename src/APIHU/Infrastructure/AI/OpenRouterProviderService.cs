@@ -51,19 +51,21 @@ public class OpenRouterOptions
     public int MaxTokens { get; set; } = 4096;
 
     /// <summary>
-    /// Número máximo de reintentos ante errores transitorios
+    /// Número máximo de intentos por modelo (1 = un solo intento, sin retry).
+    /// Mantener bajo para que el fallback a otros modelos sea rápido.
     /// </summary>
-    public int MaximoReintentos { get; set; } = 3;
+    public int MaximoReintentos { get; set; } = 1;
 
     /// <summary>
     /// Tiempo base de espera entre reintentos (ms). Se multiplica exponencialmente.
     /// </summary>
-    public int BackoffBaseMs { get; set; } = 1000;
+    public int BackoffBaseMs { get; set; } = 500;
 
     /// <summary>
-    /// Timeout de cada request individual en segundos
+    /// Timeout de cada request individual en segundos. Mantener moderado (60s)
+    /// para no bloquearnos cuando un modelo free responde lento.
     /// </summary>
-    public int TimeoutSegundos { get; set; } = 120;
+    public int TimeoutSegundos { get; set; } = 60;
 
     /// <summary>
     /// Identificador de tu app (opcional, mejora tu ranking en OpenRouter). Se envía en HTTP-Referer.
