@@ -33,7 +33,7 @@ public class GroqOptions
     /// </summary>
     public string Modelo { get; set; } = "llama-3.3-70b-versatile";
 
-    public double Temperatura { get; set; } = 0.3;
+    public double Temperatura { get; set; } = 0.1;
     public int MaxTokens { get; set; } = 4096;
     public int MaximoReintentos { get; set; } = 3;
     public int BackoffBaseMs { get; set; } = 1000;

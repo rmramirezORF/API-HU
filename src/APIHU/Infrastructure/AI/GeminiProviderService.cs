@@ -32,9 +32,11 @@ public class GeminiOptions
     public string Modelo { get; set; } = "gemini-2.5-flash";
 
     /// <summary>
-    /// Temperatura (0.0 - 2.0 en Gemini, aunque se recomienda 0.0 - 1.0)
+    /// Temperatura (0.0 - 2.0 en Gemini, recomendado 0.0 - 1.0).
+    /// Para generar HUs estructuradas conviene un valor bajo (0.1) que
+    /// produzca salidas consistentes y respetuosas del formato pedido.
     /// </summary>
-    public double Temperatura { get; set; } = 0.3;
+    public double Temperatura { get; set; } = 0.1;
 
     /// <summary>
     /// Tokens máximos de respuesta

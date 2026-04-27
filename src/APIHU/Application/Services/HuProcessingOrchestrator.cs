@@ -57,9 +57,12 @@ public class HuProcessingOrchestrator : IHuProcessingOrchestrator
             var etapa1Stopwatch = Stopwatch.StartNew();
             _logger.LogInformation("[{CorrelationId}] ▶ ETAPA 1: LIMPIEZA - Iniciando...", correlationId);
 
-            var version = request.VersionPrompt ?? "v1";
+            var version = request.VersionPrompt ?? "v2";
+            var contexto = string.IsNullOrWhiteSpace(request.Contexto) ? "(no se proporcionó contexto adicional)" : request.Contexto;
+
             var promptLimpieza = _promptService.ObtenerPromptLimpieza(version)
-                .Replace("{texto}", request.Texto ?? string.Empty);
+                .Replace("{texto}", request.Texto ?? string.Empty)
+                .Replace("{contexto}", contexto);
 
             var respuestaLimpieza = await _aiProvider.EnviarPromptAsync(promptLimpieza, cancellationToken);
             AcumularTokens(resultado, _aiProvider.UltimoUso);
@@ -89,7 +92,8 @@ public class HuProcessingOrchestrator : IHuProcessingOrchestrator
             _logger.LogInformation("[{CorrelationId}] ▶ ETAPA 2: ESTRUCTURACIÓN - Iniciando...", correlationId);
 
             var promptEstructuracion = _promptService.ObtenerPromptEstructuracion(version)
-                .Replace("{texto}", resultado.Limpieza.TextoLimpio ?? string.Empty);
+                .Replace("{texto}", resultado.Limpieza.TextoLimpio ?? string.Empty)
+                .Replace("{contexto}", contexto);
 
             var respuestaEstructuracion = await _aiProvider.EnviarPromptAsync(promptEstructuracion, cancellationToken);
             AcumularTokens(resultado, _aiProvider.UltimoUso);
@@ -127,7 +131,8 @@ public class HuProcessingOrchestrator : IHuProcessingOrchestrator
                 .Replace("{maxHUs}", maxHUs.ToString())
                 .Replace("{idioma}", idioma)
                 .Replace("{requerimientos}", requerimientosJson)
-                .Replace("{texto}", resultado.Limpieza.TextoLimpio ?? string.Empty);
+                .Replace("{texto}", resultado.Limpieza.TextoLimpio ?? string.Empty)
+                .Replace("{contexto}", contexto);
 
             var respuestaHU = await _aiProvider.EnviarPromptAsync(promptHU, cancellationToken);
             AcumularTokens(resultado, _aiProvider.UltimoUso);

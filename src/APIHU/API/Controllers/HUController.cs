@@ -81,9 +81,10 @@ public class HUController : ControllerBase
     /// El texto se valida igual que el endpoint JSON: mínimo 20 caracteres, máximo 10.000.
     /// </remarks>
     /// <param name="proyecto">Nombre del proyecto (opcional)</param>
-    /// <param name="maximoHUs">Número máximo de HUs a generar (1-20). Default: 5</param>
+    /// <param name="maximoHUs">Número MÁXIMO de HUs a generar (1-20). Default: 5. El modelo puede generar menos si juzga que basta.</param>
     /// <param name="idioma">Código de idioma. Default: "es"</param>
-    /// <param name="versionPrompt">Versión de prompt a usar. Default: "v1"</param>
+    /// <param name="versionPrompt">Versión de prompts a usar (v1=clásicos, v2=mejorados con detección de roles). Default: "v2"</param>
+    /// <param name="contexto">Contexto extra del proyecto/equipo/roles. Mejora mucho la precisión cuando la transcripción no aclara quién es el actor (ej: "Nicoll es coordinadora de RRHH y gestiona 12 personas")</param>
     /// <param name="cancellationToken">Token de cancelación</param>
     /// <response code="200">Historias de usuario generadas exitosamente</response>
     /// <response code="400">Error de validación o de generación</response>
@@ -99,7 +100,8 @@ public class HUController : ControllerBase
         [FromQuery] string? proyecto = null,
         [FromQuery] int? maximoHUs = null,
         [FromQuery] string? idioma = "es",
-        [FromQuery] string? versionPrompt = "v1",
+        [FromQuery] string? versionPrompt = "v2",
+        [FromQuery] string? contexto = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(texto))
@@ -143,7 +145,8 @@ public class HUController : ControllerBase
             Proyecto = proyecto,
             MaximoHUs = maximoHUs,
             Idioma = idioma,
-            VersionPrompt = versionPrompt
+            VersionPrompt = versionPrompt,
+            Contexto = contexto
         };
 
         return await EjecutarGeneracionAsync(request, cancellationToken);

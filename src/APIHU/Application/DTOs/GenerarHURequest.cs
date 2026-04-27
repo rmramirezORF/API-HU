@@ -23,4 +23,17 @@ public class GenerarHURequest
 
     [MaxLength(20)]
     public string? VersionPrompt { get; set; }
+
+    /// <summary>
+    /// Contexto adicional del proyecto, equipo, terminología o roles relevantes.
+    /// El modelo lo usa para identificar correctamente el rol del usuario en las HUs
+    /// y entender términos específicos del negocio. Opcional pero muy recomendado
+    /// cuando la transcripción no deja claro quién es el actor principal.
+    ///
+    /// Ejemplo:
+    ///   "Nicoll es coordinadora del área de RRHH y gestiona un equipo de 12 personas
+    ///    que reportan funciones diariamente."
+    /// </summary>
+    [MaxLength(2000)]
+    public string? Contexto { get; set; }
 }

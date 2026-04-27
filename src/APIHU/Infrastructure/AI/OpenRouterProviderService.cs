@@ -41,9 +41,9 @@ public class OpenRouterOptions
     public string[] ModelosFallback { get; set; } = Array.Empty<string>();
 
     /// <summary>
-    /// Temperatura (0.0 - 2.0)
+    /// Temperatura (0.0 - 2.0). Bajo (0.1) para JSON consistente.
     /// </summary>
-    public double Temperatura { get; set; } = 0.3;
+    public double Temperatura { get; set; } = 0.1;
 
     /// <summary>
     /// Tokens máximos de respuesta
