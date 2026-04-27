@@ -299,18 +299,20 @@ app.UseRateLimiting();
 // NEW: API Key validation
 app.UseApiKey();
 
-// Swagger
-if (app.Environment.IsDevelopment())
+// Swagger - habilitado en todos los entornos (es una herramienta interna).
+// Si más adelante quieres restringirlo solo a dev, envuélvelo en
+// if (app.Environment.IsDevelopment()) { ... }
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "API v1");
-        c.RoutePrefix = "swagger";
-        c.DisplayRequestDuration();
-        c.DisplayOperationId();
-    });
-}
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "API v1");
+    c.RoutePrefix = "swagger";
+    c.DisplayRequestDuration();
+    c.DisplayOperationId();
+});
+
+// Redirige la raíz "/" a "/swagger" para que la URL pelada sea útil
+app.MapGet("/", () => Results.Redirect("/swagger"));
 
 // Manejo de errores global
 app.UseExceptionHandler(errorApp =>
