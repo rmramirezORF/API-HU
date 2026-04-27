@@ -10,55 +10,45 @@ namespace APIHU.API.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
-[Produces("application/json")]
 public class HUController : ControllerBase
 {
     private readonly IGeneracionHUService _generacionService;
-    private readonly IPromptService _promptService;
     private readonly IAIProviderService _aiProvider;
     private readonly ILogger<HUController> _logger;
 
     public HUController(
         IGeneracionHUService generacionService,
-        IPromptService promptService,
         IAIProviderService aiProvider,
         ILogger<HUController> logger)
     {
         _generacionService = generacionService;
-        _promptService = promptService;
         _aiProvider = aiProvider;
         _logger = logger;
     }
 
     /// <summary>
-    /// Genera Historias de Usuario a partir de texto
+    /// Genera Historias de Usuario a partir de texto (formato JSON)
     /// </summary>
     /// <remarks>
-    /// Este endpoint recibe un texto (transcripción de reunión o requerimientos) y utiliza inteligencia artificial para generar Historias de Usuario estructuradas.
-    /// 
-    /// El procesamiento se realiza en un pipeline de 3 etapas:
-    /// 1. **Limpieza**: Elimina ruido y normaliza el texto
-    /// 2. **Estructuración**: Identifica requerimientos y funcionalidades
-    /// 3. **Generación**: Crea las HUs con criterios y tareas
-    /// 
-    /// **Ejemplo de Request:**
-    /// ```json
-    /// {
-    ///   "texto": "Reunión con el cliente: Necesitamos un sistema de gestión de inventario que permita registrar productos, controlar stock mínimo, generar alertas cuando el inventario baje del umbral y generar reportes de movimientos.",
-    ///   "proyecto": "Sistema de Inventario v1.0",
-    ///   "maximoHUs": 5,
-    ///   "idioma": "es",
-    ///   "versionPrompt": "v1"
-    /// }
-    /// ```
+    /// Recibe un texto (transcripción de reunión, requerimientos) en JSON y genera Historias de Usuario.
+    ///
+    /// Pipeline de 3 etapas:
+    /// 1. **Limpieza**: elimina ruido, fillers y normaliza
+    /// 2. **Estructuración**: identifica requerimientos
+    /// 3. **Generación**: crea HUs con criterios y tareas técnicas
+    ///
+    /// **Importante:** los saltos de línea dentro de "texto" deben escaparse como `\n`.
+    /// Si tu texto tiene muchos saltos de línea (transcripción de Teams, etc.) usa
+    /// el endpoint `POST /api/hu/generate-from-text` que acepta texto plano.
     /// </remarks>
     /// <param name="request">Request con el texto a procesar</param>
     /// <param name="cancellationToken">Token de cancelación</param>
-    /// <returns>Lista de Historias de Usuario generadas</returns>
     /// <response code="200">Historias de usuario generadas exitosamente</response>
-    /// <response code="400">Error en la validación del request</response>
+    /// <response code="400">Error de validación o de generación</response>
     /// <response code="500">Error interno del servidor</response>
     [HttpPost("generate")]
+    [Consumes("application/json")]
+    [Produces("application/json")]
     [ProducesResponseType(typeof(GenerarHUResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status500InternalServerError)]
@@ -66,10 +56,138 @@ public class HUController : ControllerBase
         [FromBody] GenerarHURequest request,
         CancellationToken cancellationToken)
     {
+        return await EjecutarGeneracionAsync(request, cancellationToken);
+    }
+
+    /// <summary>
+    /// Genera Historias de Usuario aceptando el texto crudo en el body (text/plain)
+    /// </summary>
+    /// <remarks>
+    /// Versión más cómoda para pegar transcripciones largas de Teams, Meet, etc.
+    ///
+    /// El cuerpo de la request es el texto plano sin escapar. Los demás parámetros
+    /// se pasan como query string.
+    ///
+    /// **Ejemplo:**
+    /// ```
+    /// POST /api/hu/generate-from-text?proyecto=OneDrive&amp;maximoHUs=2&amp;idioma=es
+    /// Content-Type: text/plain
+    ///
+    /// Hola Nicole, ¿cómo vas?
+    /// NICOLL: Está muy bien, gracias.
+    /// REYVING: ...
+    /// ```
+    ///
+    /// El texto se valida igual que el endpoint JSON: mínimo 20 caracteres, máximo 10.000.
+    /// </remarks>
+    /// <param name="proyecto">Nombre del proyecto (opcional)</param>
+    /// <param name="maximoHUs">Número máximo de HUs a generar (1-20). Default: 5</param>
+    /// <param name="idioma">Código de idioma. Default: "es"</param>
+    /// <param name="versionPrompt">Versión de prompt a usar. Default: "v1"</param>
+    /// <param name="cancellationToken">Token de cancelación</param>
+    /// <response code="200">Historias de usuario generadas exitosamente</response>
+    /// <response code="400">Error de validación o de generación</response>
+    /// <response code="500">Error interno del servidor</response>
+    [HttpPost("generate-from-text")]
+    [Consumes("text/plain")]
+    [Produces("application/json")]
+    [ProducesResponseType(typeof(GenerarHUResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status500InternalServerError)]
+    public async Task<ActionResult<GenerarHUResponse>> GenerarHUFromText(
+        [FromQuery] string? proyecto = null,
+        [FromQuery] int? maximoHUs = null,
+        [FromQuery] string? idioma = "es",
+        [FromQuery] string? versionPrompt = "v1",
+        CancellationToken cancellationToken = default)
+    {
+        // Leer el texto plano del body
+        string texto;
+        using (var reader = new StreamReader(Request.Body))
+        {
+            texto = await reader.ReadToEndAsync(cancellationToken);
+        }
+
+        if (string.IsNullOrWhiteSpace(texto))
+        {
+            return BadRequest(new ErrorResponse
+            {
+                Tipo = "ValidationError",
+                Mensaje = "El cuerpo de la request está vacío. Envía el texto a procesar como text/plain."
+            });
+        }
+
+        var request = new GenerarHURequest
+        {
+            Texto = texto,
+            Proyecto = proyecto,
+            MaximoHUs = maximoHUs,
+            Idioma = idioma,
+            VersionPrompt = versionPrompt
+        };
+
+        // Validar manualmente porque al ser texto plano, [ApiController] no aplica DataAnnotations al body
+        if (texto.Length < 20)
+        {
+            return BadRequest(new ErrorResponse
+            {
+                Tipo = "ValidationError",
+                Mensaje = "El texto debe tener al menos 20 caracteres."
+            });
+        }
+        if (texto.Length > 10_000)
+        {
+            return BadRequest(new ErrorResponse
+            {
+                Tipo = "ValidationError",
+                Mensaje = $"El texto excede el máximo de 10.000 caracteres (actual: {texto.Length})."
+            });
+        }
+        if (maximoHUs.HasValue && (maximoHUs < 1 || maximoHUs > 20))
+        {
+            return BadRequest(new ErrorResponse
+            {
+                Tipo = "ValidationError",
+                Mensaje = "maximoHUs debe estar entre 1 y 20."
+            });
+        }
+
+        return await EjecutarGeneracionAsync(request, cancellationToken);
+    }
+
+    /// <summary>
+    /// Health check del servicio
+    /// </summary>
+    /// <returns>Estado del servicio y proveedor de IA activo</returns>
+    [HttpGet("health")]
+    [Produces("application/json")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public IActionResult Health()
+    {
+        return Ok(new
+        {
+            Status = "Healthy",
+            Timestamp = DateTime.UtcNow,
+            Service = "API-HU Generator v2.0",
+            Pipeline = "3 etapas (Limpieza → Estructuración → HU)",
+            ProveedorIA = _aiProvider.NombreProveedor,
+            Modelo = _aiProvider.ModeloActual
+        });
+    }
+
+    // ============================================
+    // Lógica común reutilizada por los dos endpoints de generación
+    // ============================================
+    private async Task<ActionResult<GenerarHUResponse>> EjecutarGeneracionAsync(
+        GenerarHURequest request,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            _logger.LogInformation("Recibida solicitud de generación de HUs para proyecto: {Proyecto}", 
-                request.Proyecto ?? "Sin proyecto");
+            _logger.LogInformation(
+                "Generación HUs - Proyecto: {Proyecto}, Caracteres: {Caracteres}",
+                request.Proyecto ?? "Sin proyecto",
+                request.Texto?.Length ?? 0);
 
             if (!ModelState.IsValid)
             {
@@ -118,86 +236,5 @@ public class HUController : ControllerBase
                 Detalle = ex.Message
             });
         }
-    }
-
-    /// <summary>
-    /// Genera y guarda Historias de Usuario en la base de datos
-    /// </summary>
-    /// <param name="request">Request con el texto a procesar</param>
-    /// <param name="cancellationToken">Token de cancelación</param>
-    /// <returns>Lista de IDs de las HUs guardadas</returns>
-    [HttpPost("generate-and-save")]
-    [ProducesResponseType(typeof(GenerarHUResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status500InternalServerError)]
-    public async Task<ActionResult<GenerarHUResponse>> GenerarYGuardarHU(
-        [FromBody] GenerarHURequest request,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            if (!ModelState.IsValid)
-            {
-                return BadRequest(new ErrorResponse
-                {
-                    Tipo = "ValidationError",
-                    Mensaje = "Error de validación en el request"
-                });
-            }
-
-            var resultado = await _generacionService.GenerarYGuardarHUsAsync(request, cancellationToken);
-
-            if (!resultado.Exitoso)
-            {
-                return BadRequest(new ErrorResponse
-                {
-                    Tipo = "GenerationError",
-                    Mensaje = resultado.Mensaje
-                });
-            }
-
-            return Ok(resultado);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error al generar y guardar HUs");
-            return StatusCode(500, new ErrorResponse
-            {
-                Tipo = "InternalError",
-                Mensaje = "Error interno del servidor",
-                Detalle = ex.Message
-            });
-        }
-    }
-
-    /// <summary>
-    /// Obtiene las versiones de prompts disponibles
-    /// </summary>
-    /// <returns>Lista de versiones disponibles</returns>
-    [HttpGet("prompts/versions")]
-    [ProducesResponseType(typeof(List<string>), StatusCodes.Status200OK)]
-    public ActionResult<List<string>> ObtenerVersionesPrompt()
-    {
-        var versiones = _promptService.ObtenerVersionesDisponibles();
-        return Ok(versiones);
-    }
-
-    /// <summary>
-    /// Health check del servicio
-    /// </summary>
-    /// <returns>Estado del servicio</returns>
-    [HttpGet("health")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    public IActionResult Health()
-    {
-        return Ok(new
-        {
-            Status = "Healthy",
-            Timestamp = DateTime.UtcNow,
-            Service = "API-HU Generator v2.0",
-            Pipeline = "3 etapas (Limpieza → Estructuración → HU)",
-            ProveedorIA = _aiProvider.NombreProveedor,
-            Modelo = _aiProvider.ModeloActual
-        });
     }
 }
