@@ -33,7 +33,6 @@ Tu trabajo en la entrevista es asegurar que esas 3 cosas queden **explícitas en
 
 4. INTEGRACIONES Y RESTRICCIONES (3 min)
    ¿Con qué sistemas debe integrarse?
-   ¿Hay reglas de negocio o normas legales?
    ¿Plazos o presupuesto?
 
 5. CIERRE (2 min)
