@@ -70,16 +70,33 @@ El procesamiento se realiza en 3 etapas:
     });
 });
 
-// Entity Framework Core
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
-    ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+// Entity Framework Core - BD opcional.
+// Si hay connection string → SQL Server con persistencia.
+// Si no → fallback en memoria (la API stateless funciona perfecto sin persistir).
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+var bdSqlServerEnabled = !string.IsNullOrWhiteSpace(connectionString);
 
 builder.Services.AddDbContext<APIHUDbContext>(options =>
-    options.UseSqlServer(connectionString, sqlOptions =>
+{
+    if (bdSqlServerEnabled)
     {
-        sqlOptions.EnableRetryOnFailure(3, TimeSpan.FromSeconds(10), null);
-        sqlOptions.CommandTimeout(30);
-    }));
+        options.UseSqlServer(connectionString!, sqlOptions =>
+        {
+            sqlOptions.EnableRetryOnFailure(3, TimeSpan.FromSeconds(10), null);
+            sqlOptions.CommandTimeout(30);
+        });
+    }
+    else
+    {
+        // EF InMemory: cumple el contrato de DbContext sin necesitar SQL Server.
+        // Útil para deploys gratuitos (Render, Fly, Railway) donde no hay BD persistente.
+        options.UseInMemoryDatabase("APIHU-Memory");
+    }
+});
+
+Console.WriteLine(bdSqlServerEnabled
+    ? ">> BD: SQL Server (con persistencia)"
+    : ">> BD: en memoria (sin persistencia). Configura ConnectionStrings__DefaultConnection para usar SQL Server.");
 
 // ============================================
 // 3. CONFIGURACIÓN DE IA (chain de proveedores con fallback automático)
@@ -319,11 +336,12 @@ app.UseRouting();
 app.MapControllers();
 
 // ============================================
-// 9. INICIALIZACIÓN DE BASE DE DATOS
+// 9. INICIALIZACIÓN DE BASE DE DATOS (solo si SQL Server está habilitado)
 // ============================================
 
-using (var scope = app.Services.CreateScope())
+if (bdSqlServerEnabled)
 {
+    using var scope = app.Services.CreateScope();
     var services = scope.ServiceProvider;
     var logger = services.GetRequiredService<ILogger<Program>>();
     var dbContext = services.GetRequiredService<APIHUDbContext>();
@@ -336,16 +354,9 @@ using (var scope = app.Services.CreateScope())
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, "Error al inicializar la base de datos");
-        try
-        {
-            await dbContext.Database.EnsureCreatedAsync();
-            logger.LogInformation("Base de datos creada correctamente");
-        }
-        catch (Exception ex2)
-        {
-            logger.LogError(ex2, "No se pudo crear la base de datos");
-        }
+        logger.LogError(ex, "Error al inicializar la base de datos. La API seguirá funcionando sin persistencia.");
+        // No reintentamos EnsureCreatedAsync — si MigrateAsync falla con SQL Server,
+        // EnsureCreatedAsync probablemente también. Mejor dejar que la API funcione sin BD.
     }
 }
 

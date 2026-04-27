@@ -1,0 +1,40 @@
+# Build outputs
+**/bin/
+**/obj/
+**/out/
+
+# IDE / editor
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docs (no necesarios en runtime)
+docs/
+
+# Claude Code
+.claude/
+
+# Secretos / config local (deben pasarse via env vars del deploy, no embebidos en imagen)
+.env
+.env.local
+.env.*.local
+**/appsettings.Development.json
+**/appsettings.Local.json
+
+# Logs locales
+logs/
+**/logs/
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
