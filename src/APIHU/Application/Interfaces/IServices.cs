@@ -11,11 +11,6 @@ public interface IGeneracionHUService
     /// Genera HUs a partir de texto usando el pipeline completo
     /// </summary>
     Task<GenerarHUResponse> GenerarHUsAsync(GenerarHURequest request, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Genera y guarda HUs en la base de datos
-    /// </summary>
-    Task<GenerarHUResponse> GenerarYGuardarHUsAsync(GenerarHURequest request, CancellationToken cancellationToken = default);
 }
 
 /// <summary>

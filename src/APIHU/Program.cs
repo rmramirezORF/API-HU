@@ -1,4 +1,3 @@
-using Microsoft.EntityFrameworkCore;
 using APIHU.Application.Interfaces;
 using APIHU.Application.Services;
 using APIHU.Domain.Interfaces;
@@ -6,8 +5,6 @@ using APIHU.Infrastructure.AI;
 using APIHU.Infrastructure.Formatters;
 using APIHU.Infrastructure.Logging;
 using APIHU.Infrastructure.Middleware;
-using APIHU.Infrastructure.Persistence;
-using APIHU.Infrastructure.BackgroundServices;
 using DotNetEnv;
 
 // Cargar variables del archivo .env si existe (buscando hacia arriba desde cwd)
@@ -70,33 +67,7 @@ El procesamiento se realiza en 3 etapas:
     });
 });
 
-// Entity Framework Core - BD opcional.
-// Si hay connection string → SQL Server con persistencia.
-// Si no → fallback en memoria (la API stateless funciona perfecto sin persistir).
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-var bdSqlServerEnabled = !string.IsNullOrWhiteSpace(connectionString);
-
-builder.Services.AddDbContext<APIHUDbContext>(options =>
-{
-    if (bdSqlServerEnabled)
-    {
-        options.UseSqlServer(connectionString!, sqlOptions =>
-        {
-            sqlOptions.EnableRetryOnFailure(3, TimeSpan.FromSeconds(10), null);
-            sqlOptions.CommandTimeout(30);
-        });
-    }
-    else
-    {
-        // EF InMemory: cumple el contrato de DbContext sin necesitar SQL Server.
-        // Útil para deploys gratuitos (Render, Fly, Railway) donde no hay BD persistente.
-        options.UseInMemoryDatabase("APIHU-Memory");
-    }
-});
-
-Console.WriteLine(bdSqlServerEnabled
-    ? ">> BD: SQL Server (con persistencia)"
-    : ">> BD: en memoria (sin persistencia). Configura ConnectionStrings__DefaultConnection para usar SQL Server.");
+// (Sin base de datos. La API es stateless: cada request es independiente.)
 
 // ============================================
 // 3. CONFIGURACIÓN DE IA (chain de proveedores con fallback automático)
@@ -250,13 +221,7 @@ builder.Services.AddScoped<IHuProcessingOrchestrator, HuProcessingOrchestrator>(
 builder.Services.AddScoped<IHuValidatorService, HuValidatorService>();
 
 // ============================================
-// 5. REPOSITORIOS
-// ============================================
-builder.Services.AddScoped<IHistoriaUsuarioRepository, HistoriaUsuarioRepository>();
-builder.Services.AddScoped<IGeneracionRepository, GeneracionRepository>();
-
-// ============================================
-// 6. MIDDLEWARES DE PRODUCCIÓN
+// 5. MIDDLEWARES DE PRODUCCIÓN
 // ============================================
 
 // NEW: Rate Limiting
@@ -264,9 +229,6 @@ builder.Services.AddRateLimiting(builder.Configuration);
 
 // NEW: API Key
 builder.Services.AddApiKey(builder.Configuration);
-
-// NEW: Background Service (deshabilitado por defecto)
-builder.Services.AddHuBackgroundService(builder.Configuration);
 
 // ============================================
 // 7. CORS
@@ -338,32 +300,7 @@ app.UseRouting();
 app.MapControllers();
 
 // ============================================
-// 9. INICIALIZACIÓN DE BASE DE DATOS (solo si SQL Server está habilitado)
-// ============================================
-
-if (bdSqlServerEnabled)
-{
-    using var scope = app.Services.CreateScope();
-    var services = scope.ServiceProvider;
-    var logger = services.GetRequiredService<ILogger<Program>>();
-    var dbContext = services.GetRequiredService<APIHUDbContext>();
-
-    try
-    {
-        logger.LogInformation("Verificando estado de la base de datos...");
-        await dbContext.Database.MigrateAsync();
-        logger.LogInformation("Base de datos actualizada correctamente");
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Error al inicializar la base de datos. La API seguirá funcionando sin persistencia.");
-        // No reintentamos EnsureCreatedAsync — si MigrateAsync falla con SQL Server,
-        // EnsureCreatedAsync probablemente también. Mejor dejar que la API funcione sin BD.
-    }
-}
-
-// ============================================
-// 10. INICIO DE LA APLICACIÓN
+// 9. INICIO DE LA APLICACIÓN
 // ============================================
 
 var port = builder.Configuration["PORT"] ?? "5000";

@@ -4,6 +4,7 @@
 bin/
 obj/
 out/
+publish/
 *.user
 *.suo
 *.userosscache

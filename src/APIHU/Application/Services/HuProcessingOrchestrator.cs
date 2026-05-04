@@ -1,34 +1,30 @@
 using System.Diagnostics;
 using APIHU.Application.DTOs;
 using APIHU.Application.Interfaces;
-using APIHU.Domain.Entities;
 using APIHU.Domain.Interfaces;
 
 namespace APIHU.Application.Services;
 
 /// <summary>
-/// Orchestrator central que controla todo el flujo de procesamiento de HUs
-/// Maneja logs por cada etapa, medición de tiempo y validación final
+/// Orchestrator central que controla todo el flujo de procesamiento de HUs.
+/// Maneja logs por cada etapa, medición de tiempo y validación final.
 /// </summary>
 public class HuProcessingOrchestrator : IHuProcessingOrchestrator
 {
     private readonly IAIProviderService _aiProvider;
     private readonly IPromptService _promptService;
     private readonly IHuValidatorService _validator;
-    private readonly IGeneracionRepository _generacionRepository;
     private readonly ILogger<HuProcessingOrchestrator> _logger;
 
     public HuProcessingOrchestrator(
         IAIProviderService aiProvider,
         IPromptService promptService,
         IHuValidatorService validator,
-        IGeneracionRepository generacionRepository,
         ILogger<HuProcessingOrchestrator> logger)
     {
         _aiProvider = aiProvider;
         _promptService = promptService;
         _validator = validator;
-        _generacionRepository = generacionRepository;
         _logger = logger;
     }
 
@@ -239,30 +235,6 @@ public class HuProcessingOrchestrator : IHuProcessingOrchestrator
 
             return resultado;
         }
-    }
-
-    public async Task<GeneracionHU> GuardarGeneracionAsync(
-        GenerarHURequest request,
-        ResultadoPipeline resultado,
-        CancellationToken cancellationToken = default)
-    {
-        var generacion = new GeneracionHU
-        {
-            TextoEntrada = request.Texto ?? string.Empty,
-            TextoProcesado = resultado.Limpieza?.TextoLimpio,
-            Proyecto = request.Proyecto,
-            Idioma = request.Idioma ?? "es",
-            TotalHUs = resultado.HistoriasUsuario?.Count ?? 0,
-            Exitoso = resultado.Exitoso,
-            MensajeError = resultado.Error,
-            PromptVersion = request.VersionPrompt ?? "v1",
-            Estado = resultado.Exitoso ? EstadoGeneracion.Completado : EstadoGeneracion.Error,
-            DuracionMs = (int)(resultado.TiempoTotal?.TotalMilliseconds ?? 0),
-            ModeloIA = _aiProvider.ModeloActual,
-            TokensConsumidos = resultado.TokensTotales
-        };
-
-        return await _generacionRepository.AgregarAsync(generacion, cancellationToken);
     }
 
     private ResultadoLimpieza ParsearResultadoLimpieza(string respuesta)
@@ -530,13 +502,5 @@ public interface IHuProcessingOrchestrator
     /// </summary>
     Task<ResultadoPipeline> EjecutarPipelineCompletoAsync(
         GenerarHURequest request,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Guarda la generación en la base de datos
-    /// </summary>
-    Task<GeneracionHU> GuardarGeneracionAsync(
-        GenerarHURequest request,
-        ResultadoPipeline resultado,
         CancellationToken cancellationToken = default);
 }
