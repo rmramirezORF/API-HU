@@ -11,10 +11,10 @@ Antes de copiar nada al servidor, instala lo siguiente **en el servidor**:
 ### 1. IIS habilitado
 Server Manager → Add Roles and Features → **Web Server (IIS)**.
 
-### 2. ASP.NET Core 10 Hosting Bundle
+### 2. ASP.NET Core 9 Hosting Bundle
 **Crítico**. IIS no sabe ejecutar apps .NET sin esto.
 
-- Descarga: https://dotnet.microsoft.com/download/dotnet/10.0
+- Descarga: https://dotnet.microsoft.com/download/dotnet/9.0
 - Sección "Hosting Bundle" (NO "SDK", NO "Runtime" — el **Hosting Bundle** específicamente)
 - Instalación: doble click → siguiente → siguiente → reiniciar IIS:
   ```powershell
@@ -22,11 +22,13 @@ Server Manager → Add Roles and Features → **Web Server (IIS)**.
   net start w3svc
   ```
 
+> ⚠️ **Aviso de soporte**: el proyecto está en .NET 9 (STS). Microsoft termina soporte de seguridad el **12 de mayo de 2026**. La app seguirá funcionando, pero ya no recibirá parches de seguridad. Se recomienda planear migración a .NET 10 LTS (soporte hasta noviembre 2028) cuando sea posible instalar el Hosting Bundle 10 en el servidor.
+
 ### 3. Verificar instalación
 ```powershell
-dotnet --info
+dotnet --list-runtimes
 ```
-Debe listar `Microsoft.AspNetCore.App 10.x` y `Microsoft.NETCore.App 10.x`.
+Debe listar `Microsoft.AspNetCore.App 9.x` y `Microsoft.NETCore.App 9.x`.
 
 Si no aparece, el Hosting Bundle no se instaló correctamente.
 
